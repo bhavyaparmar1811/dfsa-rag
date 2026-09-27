@@ -1,0 +1,138 @@
+# manifest.yaml
+# Tracks every source document ingested into the RAG pipeline.
+# Update this file each time you download a new document or a new version of one.
+#
+# file_path: relative to the repo root.
+# file_hash: sha256 of the PDF (e.g. `sha256sum <file>`). Re-compute on every re-download;
+#            ingestion only re-parses / re-embeds a document when its hash changes.
+
+documents:
+  - id: dfsa-rulebook-gen
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: GEN
+    module_name: General Module
+    version: "72"
+    effective_date: "2026-07"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_1843_VER720726.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_1843_VER720726.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "a3050590f0a7ced542c0a3ebaecbba0c78e0d3af238b77b43a02920b41b6e517"
+    notes: ""
+
+  - id: dfsa-rulebook-cob
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: COB
+    module_name: Conduct of Business Module
+    version: "51"
+    effective_date: "2026-07"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_12383_VER510726.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_12383_VER510726.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "2003e4ca0a25cc661b3caae7269983a73afc8117453124d5da711867a61848b6"
+    notes: ""
+
+  - id: dfsa-rulebook-aml
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: AML
+    module_name: Anti-Money Laundering, Counter-Terrorist Financing and Sanctions Module
+    version: "30"
+    effective_date: "2026-04"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_20015_VER300426.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_20015_VER300426.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "160a0977a33296d72fc19aaed6c77fe2f0c8be8d280f453735c4d4894e59b7e8"
+    notes: ""
+
+  - id: dfsa-rulebook-mkt
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: MKT
+    module_name: Markets Rules
+    version: "27"
+    effective_date: "2026-01"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_15954_VER270126.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_15954_VER270126.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "b8fd74dfe0f812279bed1bf85e7b9a1d8eab45a5bb40dd2844d05d1c2b937d04"
+    notes: ""
+
+  - id: dfsa-rulebook-fpr
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: FPR
+    module_name: Fund Protocol Rules
+    version: "1"
+    effective_date: "2019-02"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_24059_VER1.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_24059_VER1.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "a0e08b55bce2ac44be3ab147672ddd1344f4add1568c492287b44b2e7850eb9b"
+    notes: ""
+
+  - id: dfsa-laws-regulatory_law
+    regulator: DFSA
+    rulebook: DIFC Laws
+    module_code: REG_LAW
+    module_name: "Regulatory Law"
+    version: "30"
+    effective_date: "2025-10"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_7446_VER301025.pdf"
+    file_path: data/raw/Laws/DFSA1547_7446_VER301025.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "d7f966cf87975b387c0dd081ab53affce3cfdbe2823fb3ac3b01a4f2f4161613"
+    notes: ""
+
+  - id: dfsa-laws-law_regulating_islamic_financial_business
+    regulator: DFSA
+    rulebook: DIFC Laws
+    module_code: ISL_LAW
+    module_name: "LAW REGULATING ISLAMIC FINANCIAL BUSINESS"
+    version: "50"
+    effective_date: "2022-11"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_7726_VER50.pdf"
+    file_path: data/raw/Laws/DFSA1547_7726_VER50.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "a507c45b0c6c401dd7756f492d8e9540ad2af754f9f0c19bc3bb46c3707a4731"
+    notes: ""
+
+  - id: dfsa-laws-investment_trust_law
+    regulator: DFSA
+    rulebook: DIFC Laws
+    module_code: INVESTMENT_LAW
+    module_name: "INVESTMENT TRUST LAW"
+    version: "50"
+    effective_date: "2022-11"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_9630_VER50.pdf"
+    file_path: data/raw/Laws/DFSA1547_9630_VER50.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "c404004eb78128ed7299164f3db2abe189fea90f8db5dde0b2cc7d455d539e2e"
+    notes: ""
+
+  - id: dfsa-laws-collective_investment_law
+    regulator: DFSA
+    rulebook: DIFC Laws
+    module_code: COLLECTIVE_INVESTMENT_LAW
+    module_name: "COLLECTIVE INVESTMENT LAW"
+    version: "80"
+    effective_date: "2022-11"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_14077_VER80.pdf"
+    file_path: data/raw/Laws/DFSA1547_14077_VER80.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "99bc1aa74acd5c49a0e70663a1257c9d23f9e5b0b6d6145992de9ce9838bead5"
+    notes: ""
+
+  - id: dfsa-laws-markets_law
+    regulator: DFSA
+    rulebook: DIFC Laws
+    module_code: MARKETS_LAW
+    module_name: "MARKETS LAW"
+    version: "71"
+    effective_date: "2025-12"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_15937_VER71.pdf"
+    file_path: data/raw/Laws/DFSA1547_15937_VER71.pdf
+    downloaded_on: "2026-09-26"
+    file_hash: "aa5f31a68ceb5483460b2d78c37b64797bc5f3db63a25d68d195e5aba3790a0d"
+    notes: ""

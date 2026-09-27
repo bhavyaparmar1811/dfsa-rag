@@ -1,0 +1,52 @@
+# --- Source documents (copyright: never commit) ---
+# Everything under data/raw/ is ignored. The manifest lives at data/manifest.yaml.
+data/raw/
+*.pdf
+
+# --- Local databases / vector store data ---
+data/app.db
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+qdrant_storage/
+data/qdrant/
+
+# --- Derived artifacts (regenerable from raw docs) ---
+data/parsed/
+data/processed/
+data/cache/
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
