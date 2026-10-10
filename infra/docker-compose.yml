@@ -1,0 +1,18 @@
+name: dfsa-rag
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0      # pin it; check Docker Hub for the latest v1.19.x patch
+    container_name: dfsa-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"         # REST API + web dashboard
+      - "127.0.0.1:6334:6334"         # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage   # the vectors live here
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+      # QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
+
+volumes:
+  qdrant_data:

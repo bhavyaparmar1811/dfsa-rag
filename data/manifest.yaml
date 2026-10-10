@@ -72,6 +72,19 @@ documents:
     file_hash: "a0e08b55bce2ac44be3ab147672ddd1344f4add1568c492287b44b2e7850eb9b"
     notes: ""
 
+  - id: dfsa-rulebook-glo
+    regulator: DFSA
+    rulebook: DFSA Rulebook
+    module_code: GLO
+    module_name: Glossary
+    version: "66"
+    effective_date: "2026-07"
+    source_url: "https://dfsaen.thomsonreuters.com/sites/default/files/net_file_store/DFSA1547_5717_VER660726.pdf"
+    file_path: data/raw/Rulebook/DFSA1547_5717_VER660726.pdf
+    downloaded_on: "2026-10-10"
+    file_hash: "75B0F581173EF78ACC814785AD1CB956305ADB22083656394EEE951037B09EAE"
+    notes: ""
+
   - id: dfsa-laws-regulatory_law
     regulator: DFSA
     rulebook: DIFC Laws
