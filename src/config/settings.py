@@ -56,6 +56,9 @@ class EmbeddingSettings(BaseSettings):
     model: str = "text-embedding-3-small"
     dimensions: int = 1536
     batch_size: int = 100
+    # Per-input token limit of the text-embedding-3 models. Inputs over this
+    # raise instead of being silently truncated.
+    max_input_tokens: int = 8191
 
     # USD per 1M tokens, used for cost logging.
     cost_per_1m: float = 0.02
@@ -78,6 +81,24 @@ class QdrantSettings(BaseSettings):
     collection_prefix: str = "dfsa_rules"
 
 
+class ChunkingSettings(BaseSettings):
+    model_config = _section("CHUNK_")
+
+    # Token counts for sizing decisions. cl100k_base is the tokenizer of the
+    # text-embedding-3 models; the embedding client still enforces the exact
+    # per-input limit at embed time. Kept separate from EmbeddingSettings so
+    # chunking runs without an OpenAI key.
+    tokenizer: str = "cl100k_base"
+    # Chunks longer than this are split (at sub-rules, or Guidance paragraphs).
+    # 512 matches the reranker's input window, so no chunk is silently cut
+    # off at rerank time; on COB this splits 18 of 698 chunks (2.6%).
+    max_chunk_tokens: int = 512
+    # Cross-encoders often read ~512 tokens; longer chunks are reported because
+    # the reranker would only see their beginning. Approximate: the reranker's
+    # own tokenizer differs, and the reranker logs real truncation itself.
+    rerank_warn_tokens: int = 512
+
+
 class ChatSettings(BaseSettings):
     model_config = _section("CHAT_")
 
@@ -89,6 +110,8 @@ class PathSettings(BaseModel):
     root: Path = PROJECT_ROOT
     manifest: Path = PROJECT_ROOT / "data" / "manifest.yaml"
     raw_data: Path = PROJECT_ROOT / "data" / "raw"
+    # Derived, regenerable artifacts (Docling output, chunks, reports). Gitignored.
+    parsed_dir: Path = PROJECT_ROOT / "data" / "parsed"
     sqlite_db: Path = PROJECT_ROOT / "data" / "app.db"
 
     @property

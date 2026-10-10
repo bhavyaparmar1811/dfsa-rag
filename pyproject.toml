@@ -33,6 +33,9 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "corpus: checks against the real PDFs in data/raw (skipped when they are absent)",
+]
 
 [dependency-groups]
 dev = [
