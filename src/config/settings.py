@@ -12,7 +12,7 @@ hardcode the model name anywhere else.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -36,7 +36,10 @@ class AzureOpenAISettings(BaseSettings):
     endpoint: str
     api_key: SecretStr
     api_version: str = "2024-10-21"
-    deployment: str = "gpt-4o"
+    deployment: str = Field(
+        "gpt-4o",
+        validation_alias=AliasChoices("AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT_NAME"),
+    )
 
     # USD per 1M tokens, used for cost logging. Check against your Azure pricing.
     input_cost_per_1m: float = 2.50

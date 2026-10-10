@@ -53,7 +53,19 @@ Updating the corpus (new amendments, new modules) is a **manual re-download + re
 
 ## Retrieval
 
-Hybrid search (dense + sparse/BM25-style) via Qdrant, with metadata filtering (e.g. "DFSA only", "AML only"). Reranking is in scope for v1 if time allows.
+Two-stage retrieval:
+
+1. **Candidate retrieval (recall)**: hybrid search (dense + sparse/BM25-style) via Qdrant, with metadata filtering (e.g. "DFSA only", "AML only"). Fetch a wide candidate set (configurable, start with top 30-50), deduplicated by chunk id.
+2. **Cross-encoder reranking (precision)**: score every (query, chunk) pair jointly with a cross-encoder and keep the top N (configurable, start with 5-8) for the LLM.
+
+Reranker rules:
+- Runs locally via `sentence-transformers` `CrossEncoder`. Default model: `BAAI/bge-reranker-v2-m3` (fall back to `BAAI/bge-reranker-base` if CPU latency is too high). Model name lives in config, not hardcoded.
+- Rerank the rule-level child chunk text **including its contextual header**. The parent section is only attached after reranking, for LLM context.
+- Watch the model's max input length (~512 tokens for many cross-encoders). Log when a chunk is truncated; long rules getting cut off is a real failure mode for legal text.
+- Batch the scoring calls; load the model once at app startup, not per request.
+- The top reranker score is the primary **confidence signal** for refusal: if it's below a configurable threshold, the system says it has no confident answer instead of generating one. Calibrate this threshold on the eval set, don't guess it.
+- Log to the trace: candidate ids with hybrid scores, reranked ids with reranker scores, rerank latency.
+- Reranking must be switchable in config (`rerank: on/off`, model choice) so evals can compare configurations.
 
 For follow-up questions in a conversation, rewrite the user's message into a standalone query using recent chat history **before** embedding it (e.g. "what about for retail clients?" becomes "COB suitability requirements for retail clients"). Embed the rewritten query, and log both the original and rewritten versions.
 
@@ -87,7 +99,7 @@ Operational notes:
 ## Evaluation
 
 - A hand-built golden Q&A test set covering all modules in the corpus, including a few questions that require resolving a term from a Laws document, and a few multi-turn follow-up cases to test query rewriting.
-- Retrieval metrics: recall@k, MRR.
+- Retrieval metrics: recall@k, MRR, nDCG. Report them for three configurations: dense only, hybrid, and hybrid + rerank, so the value of each stage is measured rather than assumed. Also report p50/p95 retrieval latency per configuration.
 - Answer metrics: faithfulness/groundedness, relevance (LLM-as-judge).
 - **Eval gate**: a prompt or retrieval-config change is not a valid release if it regresses eval scores below threshold.
 
