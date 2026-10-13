@@ -12,7 +12,7 @@ services:
       - qdrant_data:/qdrant/storage   # the vectors live here
     environment:
       QDRANT__TELEMETRY_DISABLED: "true"
-      # QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
 
 volumes:
   qdrant_data:
