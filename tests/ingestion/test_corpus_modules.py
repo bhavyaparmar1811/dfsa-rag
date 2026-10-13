@@ -70,3 +70,20 @@ def test_gen_lettered_chapter_and_source_typo():
     # GEN App6 Guidance cites "Rule A2.3.2(b)(i)"; GEN has no A2.3.2 (elsewhere
     # the same Guidance cites A2.3.1(b)(i)). A typo in the source PDF.
     assert report["refs"]["unresolved_in_module"] == ["GEN APP6 Guidance -> GEN A2.3.2"]
+
+
+def test_glossary_definitions():
+    chunks, report = chunked("dfsa-rulebook-glo")
+    assert report["counts"]["definitions"] == 660
+    credit = chunks["GLO Advising on Credit"]
+    assert credit["chunk_type"] == "definition" and credit["binding"]
+    assert credit["text"] == "Advising on Credit: Has the meaning given in GEN Rule 2.28.1(1)(b)."
+    assert credit["cross_refs"] == ["GEN 2.28.1"]
+    assert chunks["GLO Associate"]["page_end"] > chunks["GLO Associate"]["page_start"]
+    assert not any(k.startswith("GLO 2 Text") for k in chunks)  # no navigation noise
+
+
+def test_rules_are_tagged_with_defined_terms():
+    chunks, _ = chunked("dfsa-rulebook-cob")
+    terms = chunks["COB 3.3.1"]["defined_terms"]
+    assert {"Authorised Firm", "Financial Service", "Market Counterparty"} <= set(terms)

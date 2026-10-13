@@ -92,6 +92,7 @@ def report(
             "deleted_rules": sum(c.deleted for c in rules),
             "guidance": sum(c.chunk_type == ChunkType.GUIDANCE for c in whole),
             "text": sum(c.chunk_type == ChunkType.TEXT for c in whole),
+            "definitions": sum(c.chunk_type == ChunkType.DEFINITION for c in whole),
             "section_guidance": sum(
                 c.chunk_type == ChunkType.GUIDANCE and c.rule_number is None for c in whole
             ),

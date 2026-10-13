@@ -18,10 +18,13 @@ class ChunkType(StrEnum):
     # Text that is neither a numbered Rule nor labelled Guidance, e.g. an
     # appendix of best-practice standards. Embedded, but never presented as binding.
     TEXT = "text"
+    # One Glossary (GLO) entry. Binding: GLO 1.2.1 gives a defined term the
+    # meaning set out in the Glossary.
+    DEFINITION = "definition"
     SECTION = "section"  # parent: stored, never embedded
 
 
-EMBEDDED_TYPES = {ChunkType.RULE, ChunkType.GUIDANCE, ChunkType.TEXT}
+EMBEDDED_TYPES = {ChunkType.RULE, ChunkType.GUIDANCE, ChunkType.TEXT, ChunkType.DEFINITION}
 
 
 class Chunk(BaseModel):
@@ -29,7 +32,7 @@ class Chunk(BaseModel):
     key: str  # unique within a document version: "COB 3.3.2", "COB 3.3.2 Guidance", "COB 3.3"
     citation: str  # what an answer cites: "COB 3.3.2" (Guidance cites the rule it explains)
     chunk_type: ChunkType
-    binding: bool  # only Rules bind; Guidance and unnumbered text do not
+    binding: bool  # Rules and Glossary definitions bind; Guidance and unnumbered text don't
 
     doc_id: str
     regulator: str
@@ -66,6 +69,10 @@ class Chunk(BaseModel):
     part: int | None = None  # 1-based part number
 
     cross_refs: list[str] = Field(default_factory=list)  # ["GEN 2.26.1", "COB 3.3.4", ...]
+    # Glossary terms used in the text ("Retail Client", ...), so answers can be
+    # given with the regulator's own definitions.
+    defined_terms: list[str] = Field(default_factory=list)
+    term: str | None = None  # the term a `definition` chunk defines
 
     @property
     def embedded(self) -> bool:

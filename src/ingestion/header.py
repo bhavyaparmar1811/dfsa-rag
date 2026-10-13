@@ -38,6 +38,7 @@ def build_header(
         parts.append(f"Guidance on {citation} (non-binding)")
     elif chunk_type == ChunkType.TEXT:
         parts.append(f"Text in {citation} (not a numbered Rule, non-binding)")
+    # A definition's heading_path already ends with "Definition of '<term>'".
     header = " > ".join(parts)
     if part is not None:
         header += f" (part {part} of {total_parts})"

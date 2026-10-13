@@ -9,6 +9,10 @@ Writes, per document:
 
 Uses the cached Docling parse (see parse.py); a document that hasn't been
 parsed yet is parsed first.
+
+The Glossary (GLO) is chunked first: its terms are used to tag every other
+document's chunks with the Defined Terms they use. Chunking one document on
+its own reuses GLO's saved output (and chunks GLO first if there is none).
 """
 
 import argparse
@@ -20,22 +24,28 @@ from functools import lru_cache
 import tiktoken
 
 from src.config.settings import ChunkingSettings, PathSettings
+from src.ingestion.chunkers.glossary import GlossaryChunker
 from src.ingestion.chunkers.rulebook import RulebookChunker
 from src.ingestion.elements import to_elements
 from src.ingestion.manifest import ManifestEntry, load_manifest
 from src.ingestion.parse import parse
 from src.ingestion.refs import annotate
 from src.ingestion.split import Splitter
+from src.ingestion.terms import TermMatcher, tag, term_frequencies
 from src.ingestion.validate import report, toc_sections
 
 logger = logging.getLogger(__name__)
 
-# Laws and the Glossary table get their own chunkers in later steps.
-UNSUPPORTED_MODULES = {"GLO"}
+GLOSSARY_MODULE = "GLO"
 
 
 def supported(entry: ManifestEntry) -> bool:
-    return entry.doc_type == "rulebook" and entry.module_code not in UNSUPPORTED_MODULES
+    # Laws get their own chunker in a later step.
+    return entry.doc_type == "rulebook"
+
+
+def is_glossary(entry: ManifestEntry) -> bool:
+    return entry.module_code == GLOSSARY_MODULE
 
 
 @lru_cache
@@ -51,13 +61,21 @@ def chunk_document(
 ) -> dict:
     doc = parse(entry, paths=paths)
     encoding = _encoding(cfg.tokenizer)
+    codes = module_codes or {entry.module_code}
 
     def count(text: str) -> int:
         return len(encoding.encode(text))
 
-    result = RulebookChunker(entry, count).chunk(to_elements(doc))
+    elements = to_elements(doc)
+    if is_glossary(entry):
+        result = GlossaryChunker(entry, count).chunk(doc, elements)
+        matcher = TermMatcher([c.term for c in result.chunks if c.term])
+    else:
+        result = RulebookChunker(entry, count).chunk(elements)
+        matcher = glossary_matcher(cfg, paths, codes)
     chunks = Splitter(count, cfg.max_chunk_tokens).split_chunks(result.chunks)
-    chunks = annotate(chunks, module_codes or {entry.module_code})
+    chunks = annotate(chunks, codes)
+    chunks = tag(chunks, matcher)
 
     chunks_dir = paths.parsed_dir / "chunks"
     reports_dir = paths.parsed_dir / "reports"
@@ -75,11 +93,34 @@ def chunk_document(
         rerank_warn_tokens=cfg.rerank_warn_tokens,
         max_chunk_tokens=cfg.max_chunk_tokens,
     )
-    rep = {"doc_id": entry.id, **rep}
+    frequent = term_frequencies(chunks).most_common(15)
+    rep = {"doc_id": entry.id, **rep, "most_used_terms": dict(frequent)}
     (reports_dir / f"{entry.id}.json").write_text(
         json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     return rep
+
+
+_matchers: dict[str, TermMatcher] = {}
+
+
+def glossary_matcher(cfg: ChunkingSettings, paths: PathSettings, codes: set[str]) -> TermMatcher:
+    """Matcher over the Glossary's terms, from GLO's saved chunks."""
+    glo = next(e for e in load_manifest() if is_glossary(e))
+    path = paths.parsed_dir / "chunks" / f"{glo.id}.jsonl"
+    key = f"{path}:{path.stat().st_mtime_ns}" if path.is_file() else ""
+    if key not in _matchers:
+        if not path.is_file():
+            logger.info("Chunking %s first: its terms are needed for tagging", glo.id)
+            chunk_document(glo, cfg, paths, codes)
+            key = f"{path}:{path.stat().st_mtime_ns}"
+        terms = [
+            row["term"]
+            for row in map(json.loads, path.read_text(encoding="utf-8").splitlines())
+            if row.get("term")
+        ]
+        _matchers[key] = TermMatcher(terms)
+    return _matchers[key]
 
 
 def print_summary(reports: list[dict], cfg: ChunkingSettings) -> None:
@@ -118,6 +159,7 @@ def main() -> int:
         return 1
 
     codes = {e.module_code for e in load_manifest() if e.doc_type == "rulebook"}
+    entries.sort(key=lambda e: not is_glossary(e))  # GLO first: the others use its terms
     reports = []
     for entry in entries:
         if not supported(entry):
