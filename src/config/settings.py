@@ -11,6 +11,7 @@ hardcode the model name anywhere else.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -98,6 +99,8 @@ class QdrantSettings(BaseSettings):
     sparse_k: float = 1.2
     sparse_b: float = 0.75
     sparse_avg_len: float = 124.0
+    # fastembed's default cache is the system temp directory, which gets cleaned.
+    sparse_cache_dir: Path = PROJECT_ROOT / "data" / "cache" / "fastembed"
     timeout_s: int = 30
     upsert_batch_size: int = 100
 
@@ -131,6 +134,65 @@ class ChunkingSettings(BaseSettings):
     # the reranker would only see their beginning. Approximate: the reranker's
     # own tokenizer differs, and the reranker logs real truncation itself.
     rerank_warn_tokens: int = 512
+
+
+class RetrievalSettings(BaseSettings):
+    """Question -> rule-level chunks -> LLM context. Every stage is switchable, so
+    evals can compare dense / hybrid / hybrid + rerank and the parent policies."""
+
+    model_config = _section("RETRIEVAL_")
+
+    # --- candidates (recall) ---
+    # dense: embeddings only; sparse: BM25 only; hybrid: both, fused by RRF.
+    mode: Literal["dense", "sparse", "hybrid"] = "hybrid"
+    candidate_k: int = 40  # per retriever, and after fusion
+    rrf_k: int = 60  # reciprocal rank fusion: score = sum(1 / (rrf_k + rank))
+    # Exact citations in the question ("COB 3.3.2") looked up directly; kept first.
+    citation_lookup: bool = True
+    max_citation_hits: int = 8
+
+    # --- rerank (precision) ---
+    rerank: bool = True
+    # How many of the fused candidates the cross-encoder scores (plus any exact
+    # citation hits); time is about linear in it. On a GPU all 40 take ~1.5 s with
+    # bge-reranker-v2-m3; on CPU the same takes ~90 s, so lower it (or use
+    # bge-reranker-base) on a machine without one.
+    rerank_k: int = 40
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_max_length: int = 512  # tokens of (question, chunk); longer pairs are cut
+    reranker_batch_size: int = 16
+    reranker_device: str | None = None  # None: "cuda" if a GPU is available, else "cpu"
+    reranker_fp16: bool = True  # half precision, on a GPU only
+    top_n: int = 6
+
+    # The top reranker score is the confidence signal. None = not calibrated yet:
+    # Phase H calibrates it on the golden set. Never guess it.
+    refusal_threshold: float | None = None
+
+    # --- context assembly (what the LLM sees) ---
+    # none: the hits only; section: the whole section when it fits in
+    # parent_max_tokens, else a window; window: always a window of siblings.
+    parent_mode: Literal["none", "section", "window"] = "section"
+    parent_max_tokens: int = 1500
+    parent_window: int = 1  # siblings on each side of a hit
+    section_hit_min: int = 3  # this many hits in one section -> the whole section
+    include_scope_rules: bool = True  # "does not apply to ..." rules change answers
+    include_guidance: bool = True  # a hit rule's Guidance, and a hit Guidance's rule
+    expand_refs: bool = False  # one hop along cross-references
+    max_ref_blocks: int = 4
+    include_definitions: bool = True
+    max_definitions: int = 6  # in all
+    max_hit_definitions: int = 3  # of terms the hits use but the question doesn't
+    # Terms used in more than this share of chunks are too common to be worth
+    # defining (unless the question itself uses them).
+    term_max_share: float = 0.05
+    skip_terms: list[str] = Field(
+        default_factory=lambda: [
+            "Rule", "Rules", "DFSA", "DIFC", "Person", "person", "Law", "Module",
+            "GEN", "COB", "AML", "MKT", "FPR", "GLO",
+        ]
+    )  # fmt: skip
+    context_budget_tokens: int = 6000
 
 
 class ChatSettings(BaseSettings):

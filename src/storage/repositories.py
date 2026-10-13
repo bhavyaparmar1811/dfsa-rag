@@ -168,6 +168,37 @@ class ChunkRepository:
     def by_key(self, key: str) -> ChunkRow | None:
         return self.s.scalar(select(ChunkRow).where(ChunkRow.key == key))
 
+    def by_citations(self, citations: Iterable[str]) -> list[ChunkRow]:
+        """Every row citing one of `citations`: a rule, its parts and its Guidance."""
+        rows = select(ChunkRow).where(ChunkRow.citation.in_(list(citations)))
+        return list(self.s.scalars(rows.order_by(ChunkRow.document_id, ChunkRow.order_idx)))
+
+    def by_keys(self, keys: Iterable[str]) -> list[ChunkRow]:
+        return list(self.s.scalars(select(ChunkRow).where(ChunkRow.key.in_(list(keys)))))
+
+    def definitions_for(self, terms: Iterable[str]) -> list[ChunkRow]:
+        """Definition chunks (Glossary and Law Schedules) of these Defined Terms."""
+        rows = select(ChunkRow).where(
+            ChunkRow.chunk_type == "definition", ChunkRow.term.in_(list(terms))
+        )
+        return list(self.s.scalars(rows.order_by(ChunkRow.document_id, ChunkRow.order_idx)))
+
+    def term_shares(self) -> dict[str, float]:
+        """{term: share of non-section chunks using it}: how common each Defined Term is."""
+        total = self.s.scalar(
+            select(func.count()).select_from(ChunkRow).where(ChunkRow.chunk_type != "section")
+        )
+        counts = self.s.execute(
+            select(ChunkTerm.term, func.count())
+            .join(ChunkRow, ChunkRow.id == ChunkTerm.chunk_id)
+            .where(ChunkRow.chunk_type != "section")
+            .group_by(ChunkTerm.term)
+        )  # fmt: skip
+        return {term: n / total for term, n in counts} if total else {}
+
+    def defined_terms(self) -> list[str]:
+        return sorted(set(self.s.scalars(select(ChunkRow.term).where(ChunkRow.term.is_not(None)))))
+
     def by_ids(self, ids: Iterable[str]) -> list[ChunkRow]:
         return list(self.s.scalars(select(ChunkRow).where(ChunkRow.id.in_(list(ids)))))
 

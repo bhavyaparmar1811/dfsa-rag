@@ -40,8 +40,9 @@ class SparseEncoder:
         self.cfg = cfg
         self.fingerprint = cfg.sparse_fingerprint
         self._model = model or SparseTextEmbedding(
-            cfg.sparse_model, k=cfg.sparse_k, b=cfg.sparse_b, avg_len=cfg.sparse_avg_len
-        )
+            cfg.sparse_model, cache_dir=str(cfg.sparse_cache_dir),
+            k=cfg.sparse_k, b=cfg.sparse_b, avg_len=cfg.sparse_avg_len,
+        )  # fmt: skip
 
     def encode_documents(self, texts: list[str]) -> list[SparseVector]:
         start = time.perf_counter()

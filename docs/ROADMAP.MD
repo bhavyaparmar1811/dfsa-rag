@@ -15,7 +15,7 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | A | Foundation: settings, embedding client, smoke tests, Qdrant container | ✅ |
 | B | Extraction and chunking of all 11 documents | ✅ |
 | C | Storage (SQLite + Qdrant) and embedding | ✅ |
-| D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ⬜ |
+| D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ✅ |
 | E | Langfuse: self-hosted tracing and prompt store | ⬜ |
 | F | Generation, grounding and refusal | ⬜ |
 | G | Chat history, query rewriting, FastAPI | ⬜ |
@@ -130,7 +130,8 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 - `chunk_refs` holds 2,495 rows, the same as the JSONL. `chunk_terms` holds 16,469 rows across 3,425 chunks.
 
 ### ✅ C4: Qdrant collection, sparse encoder, embed GLO only
-**Run it:** `uv run python -m src.ingestion.ingest --doc dfsa-rulebook-glo`, then `uv run python -m scripts.inspect_store "GLO Retail Client"`.
+**Run it:** `uv run python -m src.ingestion.ingest --doc dfsa-rulebook-glo`, then `uv run python -m scripts.inspect_store "GLO Retail Client"
+uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market Counterparty?"`.
 
 | What | Where |
 |---|---|
@@ -257,18 +258,51 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 
 ---
 
-## Phase D: Retrieval ⬜
+## Phase D: Retrieval ✅
 **Goal:** question → the best rule-level chunks, with scores and a confidence signal, plus the context the LLM needs. Everything is configurable, so evals can compare setups.
+
+**Run it:** `uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market Counterparty?"`. It shows every stage; `--json` prints the trace, and `--no-rerank`, `--mode`, `--reranker`, `--module` and `--binding-only` change the setup.
 
 | Step | What | Files |
 |---|---|---|
-| D1 | `RetrievalSettings`: `mode` (`dense`/`hybrid`), `candidate_k=40`, `rerank`, `reranker_model=BAAI/bge-reranker-v2-m3`, `reranker_max_length=512`, `top_n=6`, `refusal_threshold`, `parent_mode` (`none`/`section`/`window`), `parent_max_tokens=1500`, `context_budget_tokens=6000`, `expand_refs`, filters | `src/config/settings.py` |
-| D2 | **Citation router**: find `COB 3.3.2` / `Regulatory Law Art. 20` / `GLO Retail Client` in the question (reusing the `refs.py` patterns) and look it up through the payload `citation` index. Exact hits come first. This is needed because BM25 splits `3.3.2` into `3 3 2` | `src/retrieval/citations.py` |
-| D3 | Hybrid candidates: embed the query (the same `EmbeddingClient`), sparse-encode it (the same `SparseEncoder`), Qdrant `query_points` with dense and BM25 prefetches fused by RRF, metadata filters (regulator/module/binding), de-duplicated | `src/retrieval/hybrid.py` |
-| D4 | Cross-encoder rerank: the model is loaded once, scores (question, header+text) pairs in batches, **logs truncation using the reranker's own tokenizer**, keeps the top N; the top score is the confidence signal | `src/retrieval/rerank.py` |
-| D5 | Context assembly from SQLite: part → whole rule; parents under the size policy (the full section if ≤ 1,500 tokens, otherwise a window); **scope rules always included**; Guidance attached to its rule; whole section included if ≥3 of its children were hit; optional one-hop reference expansion; **Defined Term definitions** (skipping very common terms such as "Person" and "Rule"); overall token budget; strongest source first | `src/retrieval/context.py` |
-| D6 | `retrieve(question, filters) → RetrievalResult`: candidates, reranked results, confidence, context blocks, latency per stage, all ready for the trace | `src/retrieval/pipeline.py` |
-| D7 | Tests with a fake Qdrant and fake models; manual check: the Market Counterparty exemption question surfaces COB 3.3.1 | `tests/retrieval/` |
+| ✅ D1 | `RetrievalSettings` (env prefix `RETRIEVAL_`): `mode` (dense/sparse/hybrid), `candidate_k=40`, `rrf_k=60`, `citation_lookup`, `max_citation_hits=8`, `rerank`, **`rerank_k=40`**, `reranker_model`, `reranker_device` (auto), `reranker_fp16`, `reranker_max_length=512`, `top_n=6`, `refusal_threshold=None` (not calibrated), `parent_mode=section`, `parent_max_tokens=1500`, `parent_window=1`, `section_hit_min=3`, `include_scope_rules`, `include_guidance`, `expand_refs`, `include_definitions`, `max_definitions=6`, `max_hit_definitions=3`, `term_max_share=0.05`, `skip_terms`, `context_budget_tokens=6000`. Filters are per request (`Filters`: regulators, modules, doc_types, chunk_types, binding_only) | `src/config/settings.py`, `src/retrieval/models.py` |
+| ✅ D2 | **Citation router.** Reads `COB 3.3.2`, `cob rule 3.3.2(1)(a)`, `Rule 3.3.2 of COB`, `COB section 3.3`, a bare `Rule 2.3.2` (looked up in every module), `Article 20 of the Regulatory Law`, `regulatory law art. 76 and article 77`, and the Law Regulating Islamic Financial Business. Resolves through SQLite to the embedded chunks (a rule with its parts and Guidance; a section with its children), applies the filters, and reports `unresolved` (e.g. the source typo `COB 16.6.4`), `too_broad` (chapters, appendices) and `filtered_out` | `src/retrieval/citations.py` |
+| ✅ D3 | Hybrid candidates: the same `EmbeddingClient` and `SparseEncoder` as ingestion, both searches in **one batched Qdrant request** with the same filter, and **RRF fusion done client-side**, so each candidate keeps its dense rank, BM25 rank and fused score for the trace | `src/retrieval/hybrid.py` |
+| ✅ D4 | Cross-encoder rerank, scores 0–1 (sigmoid), **on the GPU in fp16 when there is one**. Loaded once; header + text are scored, exactly what was embedded; **truncation counted with the reranker's own tokenizer** and logged per chunk. Only the exact hits plus the top `rerank_k` candidates are scored | `src/retrieval/rerank.py` |
+| ✅ D5 | Context assembly from SQLite: a split rule shown whole; scope rules always; Guidance ↔ rule; the whole section if ≤ 1,500 tokens, otherwise ±1 sibling, and the whole section anyway on ≥ 3 hits; Defined Terms (the question's terms first, matched case-insensitively; then the rarest terms of the strongest hits; terms used in > 5% of chunks skipped; the hit's own Law's definition preferred over the Glossary's); optional one-hop references; a token budget that drops by priority and never drops a hit. **One block = one chunk**, labelled *Rule (binding)* / *Guidance (non-binding)* / *Definition* / *Law article* | `src/retrieval/context.py` |
+| ✅ D6 | `Retriever.build()` checks the collection against the configuration, loads the reranker, and wires the stages; `retrieve(question, filters) → RetrievalResult` with the citations, candidates (all scores), hits, confidence, context blocks, timings per stage, embedding tokens and $, truncations and dropped blocks; `trace()` returns plain JSON for Phase G | `src/retrieval/pipeline.py` |
+| ✅ D7 | 56 tests with fakes (temporary SQLite + in-memory Qdrant + fake embedder, BM25 and scorer) plus 5 corpus tests on the live index (BM25 only, free); **manual check passed** (below) | `tests/retrieval/` |
+
+**Decisions made while building it:**
+- **Exact citation hits are kept and placed first**, even beyond `top_n`. They are still reranked, so the trace has their scores. A question naming a provision always gets that provision.
+- **The citation router resolves through SQLite, not the Qdrant payload index.** SQLite knows sections, parts and deleted provisions, so it can expand "COB 3.3" to its children and tell "not in the corpus" apart from "too broad". The points are then fetched by id, and the filters are applied the same way as in search.
+- **Confidence** is the best rerank score among the hits. `confident` stays `None` until Phase H calibrates `refusal_threshold`; without a reranker there is no confidence signal at all, on purpose.
+- **`rerank_k=40`** (all candidates) on the GPU. The setting exists because the cross-encoder scores about linearly in the number of pairs: on a CPU-only machine, lower it to about 20 or use `bge-reranker-base`. Candidates past it stay in the trace, unscored.
+- **Definitions are chosen by the question first.** Ranking by how often the hits use a term gave noise (Fund Manager, Holding Company, Undertaking), so the rarest terms of the strongest hits now fill at most 3 slots.
+- **fastembed's model cache moved to `data/cache/fastembed`** (gitignored). Its default is the system temp directory, which gets cleaned, and it then fails offline.
+- **`sentence-transformers` 6.1 was added**, as CLAUDE.md specifies for the reranker.
+- **PyTorch comes from the CUDA 12.6 index** (`torch 2.14.1+cu126`, `torchvision 0.29.1+cu126`).
+  - They are declared as direct dependencies, because `[tool.uv.sources]` only applies to direct dependencies.
+  - The CUDA wheels still run on CPU elsewhere; macOS keeps the PyPI build.
+  - Docling shares this PyTorch, and its parse cache is unaffected (its key depends on the Docling version only).
+
+**Manual check (D7): "Do we need a Client Agreement with a Market Counterparty?"**
+- Hybrid search alone ranks the exemption **COB 3.3.1** 12th (dense 35th, BM25 4th), outside the top 6.
+- With `bge-reranker-v2-m3` it is **1st, with a score of 0.860**; the next is 0.623.
+- The context is the whole of COB 3.3 (3.3.1–3.3.4 with the Guidance), the Market Counterparty classification rule COB 2.3.9 with its Guidance, and the definitions of *Client Agreement* and *Market Counterparty*: 17 blocks, 5,984 tokens.
+
+**Reranker: `BAAI/bge-reranker-v2-m3` on the GPU (decided).** The machine has an RTX 3050 Laptop GPU (4 GB, compute capability 8.6, driver 610.78). Measured on the same 40 hybrid candidates per question:
+
+| Reranker | Parameters | CPU, fp32 | **GPU, fp16** | Peak GPU memory | Q1: COB 3.3.1 | Q2: COB 2.3.3 | Q3: COB 3.4.2 | Q4: AML 8.1.1 | Scores |
+|---|---|---|---|---|---|---|---|---|---|
+| none (hybrid RRF) | – | – | – | – | 12 | 2 | 3 | 1 | rank-based, no confidence |
+| `cross-encoder/ms-marco-MiniLM-L6-v2` | 22M | 3.4–4.5 s | 0.12–0.5 s | 0.12 GiB | 4 | 2 | 1 | 1 | saturate at 0.99+, a weak refusal signal |
+| `BAAI/bge-reranker-base` (CLAUDE.md fallback) | 278M | 23–28 s | 0.4–0.5 s | 0.67 GiB | **1** | 3 | 2 | 1 | 0.21 on Q1: low, but separated |
+| **`BAAI/bge-reranker-v2-m3` (CLAUDE.md default)** | 568M | 80–97 s | **1.1–1.6 s** | 1.77 GiB | **1** | 3 | 1 | 1 | the best separation (0.86 vs 0.62) |
+
+- fp16 on the GPU gives the **same rankings** as fp32 on the CPU, with scores equal to 2–3 decimals (COB 3.3.1: 0.860 vs 0.86).
+- **End to end**, the Market Counterparty question takes **2.6 s**: rerank of all 40 candidates 1.8 s, query embedding 0.8 s, search 42 ms, context 22 ms. On CPU it took 57 s.
+- 4 questions are not an evaluation. Phase H compares the configurations, including all three rerankers, on the golden set.
 
 ## Phase E: Langfuse, self-hosted ⬜
 **Goal:** versioned prompts, request traces and eval datasets, all running locally.
@@ -335,6 +369,10 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 | The index plan is diffed against Qdrant's own points, not SQLite's `is_embedded` flag | Crashes, lost collections and `--no-embed` reloads heal without re-embedding what exists |
 | `payload_hash` in each point | Metadata-only changes rewrite the payload instead of re-embedding |
 | BM25 `avg_len` measured on the corpus (124) and part of the sparse fingerprint | fastembed's default of 256 under-penalises long chunks; a change means re-encoding |
+| RRF fusion client-side, both searches in one batched request | The trace keeps the dense and BM25 ranks of every candidate; the same latency |
+| Exact citation hits pinned first, resolved through SQLite | A named provision is always in the answer's context; sections and "not in the corpus" are handled |
+| One context block = one chunk, labelled binding / non-binding | Every sentence of an answer can cite exactly one provision (Phase F's validator) |
+| The reranker runs on the GPU in fp16 (`bge-reranker-v2-m3`), all 40 candidates | ~65× faster than CPU with identical rankings; `rerank_k` stays configurable for CPU-only machines |
 | Langfuse together with a slim SQLite record; prompts in git, synced to Langfuse; git copy as fallback | Chosen by you at the start of the project |
 
 ## Open items / known limitations
@@ -369,3 +407,8 @@ uv run ruff check
 - ✅ (C5) A full `ingest` ($0.011009, 3,397 points), then a re-run at $0.00, then `--reconcile` reports CLEAN.
 - ✅ (C6) `uv run pytest -m corpus` passes against the live Qdrant (31 corpus tests, 9 of them on the store).
 - ✅ `pytest` (212) and `ruff check` are green.
+
+## Verification for Phase D
+- ✅ `pytest`: 268 tests (36 corpus) and `ruff check` are green.
+- ✅ The manual check: the Market Counterparty question surfaces COB 3.3.1 first (with a reranker).
+- ✅ The reranker: `bge-reranker-v2-m3` on the GPU (fp16); 2.6 s end to end.

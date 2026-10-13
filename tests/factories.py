@@ -59,8 +59,12 @@ def qdrant_settings(**kw) -> QdrantSettings:
     return QdrantSettings(_env_file=None, **kw)
 
 
+STOPWORDS = {"the", "of", "and", "a", "an", "is", "to", "in", "with", "or"}
+
+
 def _word_ids(text: str) -> list[int]:
-    return sorted({int(hashlib.md5(w.encode()).hexdigest()[:7], 16) for w in text.lower().split()})
+    words = {w.strip("?.,:;()") for w in text.lower().split()} - STOPWORDS - {""}
+    return sorted({int(hashlib.md5(w.encode()).hexdigest()[:7], 16) for w in words})
 
 
 class FakeEmbedder:
@@ -83,6 +87,9 @@ class FakeEmbedder:
             fingerprint=self.cfg.fingerprint, prompt_tokens=tokens,
             cost_usd=tokens * self.cfg.cost_per_1m / 1_000_000, latency_ms=0.0,
         )  # fmt: skip
+
+    def embed_query(self, text: str) -> EmbeddingResult:
+        return self.embed_documents([text])
 
     @property
     def embedded_texts(self) -> int:
