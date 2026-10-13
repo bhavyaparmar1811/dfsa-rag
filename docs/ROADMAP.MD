@@ -16,7 +16,7 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | B | Extraction and chunking of all 11 documents | ✅ |
 | C | Storage (SQLite + Qdrant) and embedding | ✅ |
 | D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ✅ |
-| E | Langfuse: self-hosted tracing and prompt store | ⬜ |
+| E | Langfuse: self-hosted tracing and prompt store | 🔄 |
 | F | Generation, grounding and refusal | ⬜ |
 | G | Chat history, query rewriting, FastAPI | ⬜ |
 | H | Evaluation: golden set, metrics, LLM judges, release gate | ⬜ |
@@ -304,12 +304,12 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **End to end**, the Market Counterparty question takes **2.6 s**: rerank of all 40 candidates 1.8 s, query embedding 0.8 s, search 42 ms, context 22 ms. On CPU it took 57 s.
 - 4 questions are not an evaluation. Phase H compares the configurations, including all three rerankers, on the golden set.
 
-## Phase E: Langfuse, self-hosted ⬜
+## Phase E: Langfuse, self-hosted 🔄
 **Goal:** versioned prompts, request traces and eval datasets, all running locally.
 
 | Step | What | Files |
 |---|---|---|
-| E1 | Langfuse v3 in Docker (web, worker, Postgres, ClickHouse, Redis, MinIO) in the same compose file; localhost only; pinned images; headless setup so the project keys match `.env`; telemetry off. Needs about 4–6 GB of RAM | `infra/docker-compose.yml`, `infra/.env.example` |
+| 🔄 E1 | Langfuse **v4** in Docker (web, worker, Postgres, ClickHouse, Redis, MinIO) in the same compose file; only `langfuse-web` published (`127.0.0.1:3000`), the data stores on the compose network only; pinned images; headless setup so the project keys match `.env`; signup disabled; telemetry off. Secrets generated into `.env` by `init_langfuse_env` (never printed, never overwritten). Needs about 4–6 GB of RAM | `infra/docker-compose.yml`, `.env.example`, `scripts/init_langfuse_env.py` |
 | E2 | `LangfuseSettings` and `get_langfuse()` (does nothing when disabled, so tests run offline); `scripts/check_langfuse.py` | `src/observability/langfuse.py` |
 | E3 | Prompts as files in git (`prompts/*.yaml`: answer, query-rewrite, refusal, judge-faithfulness, judge-relevance); `sync_prompts.py` pushes changed prompts as a `staging` version; `promote_prompt.py` moves `production` only after the eval gate passes (Phase H) | `prompts/`, `src/prompts/registry.py`, `scripts/` |
 | E4 | `PromptRegistry.get(name, label)`: if Langfuse is unreachable, **falls back to the git copy**, recorded as `local-fallback` with a hash; a check at startup reports when git and production differ | `src/prompts/registry.py` |
@@ -374,6 +374,7 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 | One context block = one chunk, labelled binding / non-binding | Every sentence of an answer can cite exactly one provision (Phase F's validator) |
 | The reranker runs on the GPU in fp16 (`bge-reranker-v2-m3`), all 40 candidates | ~65× faster than CPU with identical rankings; `rerank_k` stays configurable for CPU-only machines |
 | Langfuse together with a slim SQLite record; prompts in git, synced to Langfuse; git copy as fallback | Chosen by you at the start of the project |
+| Langfuse v4, not v3 | v4 GA since 2026-07-29; v3 gets security patches only until 2027-01; same components; a fresh install has nothing to migrate |
 
 ## Open items / known limitations
 - Source typos: COB "Rule 16.6.4" and GEN "A2.3.2" (reported, not "fixed").
@@ -383,7 +384,9 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 
 ## Commands
 ```
+uv run python -m scripts.init_langfuse_env --email you@example.com  # Langfuse secrets into .env (once)
 docker compose -f infra/docker-compose.yml --env-file .env up -d
+curl.exe -s http://127.0.0.1:3000/api/public/health    # Langfuse; UI at http://127.0.0.1:3000
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

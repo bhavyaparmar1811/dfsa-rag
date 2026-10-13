@@ -1,5 +1,53 @@
 name: dfsa-rag
 
+# Langfuse (self-hosted, v4): versioned prompts, request traces and eval datasets.
+# Shared by langfuse-web and langfuse-worker. Every secret comes from .env
+# (filled by `uv run python -m scripts.init_langfuse_env`); `:?` makes compose
+# refuse to start if one is missing. Only langfuse-web is published to the host;
+# the data stores are reachable on the compose network only.
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://127.0.0.1:3000
+  DATABASE_URL: postgresql://postgres:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set in .env}@postgres:5432/postgres
+  SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set in .env}                         # hashes API keys
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?LANGFUSE_ENCRYPTION_KEY must be set in .env}  # 64 hex chars; encrypts stored secrets
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set in .env}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set in .env}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  # Media (images/attachments) uploads: MinIO has no host port, so SDK media uploads
+  # won't work from the host. We only trace text, so this is accepted.
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:?LANGFUSE_REDIS_AUTH must be set in .env}
+  REDIS_TLS_ENABLED: "false"
+
+x-langfuse-depends-on: &langfuse-depends-on
+  postgres:
+    condition: service_healthy
+  clickhouse:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.19.0      # pin it; check Docker Hub for the latest v1.19.x patch
@@ -14,5 +62,122 @@ services:
       QDRANT__TELEMETRY_DISABLED: "true"
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
 
+  # Langfuse UI + public API (the SDK talks to this). The only Langfuse port on the host.
+  langfuse-web:
+    image: langfuse/langfuse:4.57.0   # keep in lockstep with langfuse-worker
+    container_name: dfsa-langfuse-web
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET must be set in .env}  # signs login sessions
+      AUTH_DISABLE_SIGNUP: "true"     # only the init user below can log in
+      # Headless setup: on first start, create the org, project, API keys and admin user.
+      # The keys come from .env, so the keys our code uses are the keys the server has.
+      LANGFUSE_INIT_ORG_ID: dfsa-rag
+      LANGFUSE_INIT_ORG_NAME: DFSA RAG
+      LANGFUSE_INIT_PROJECT_ID: dfsa-rag
+      LANGFUSE_INIT_PROJECT_NAME: DFSA RAG
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set in .env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set in .env}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:?LANGFUSE_INIT_USER_EMAIL must be set in .env}
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?LANGFUSE_INIT_USER_PASSWORD must be set in .env}
+
+  # Background jobs: moves queued events from Redis/MinIO into ClickHouse, runs evals and exports.
+  langfuse-worker:
+    image: langfuse/langfuse-worker:4.57.0
+    container_name: dfsa-langfuse-worker
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+
+  # Postgres: users, projects, API keys, prompts, datasets (the transactional data).
+  postgres:
+    image: postgres:17.11
+    container_name: dfsa-langfuse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # ClickHouse: traces, observations and scores (the analytics data, column store).
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.4.5.143   # v4 needs >= 25.12; 26.4 is Langfuse's recommendation
+    container_name: dfsa-langfuse-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  # Redis: the queue between langfuse-web (receives events) and langfuse-worker (processes them).
+  redis:
+    image: redis:7.4.11
+    container_name: dfsa-langfuse-redis
+    restart: unless-stopped
+    command: >
+      --requirepass ${LANGFUSE_REDIS_AUTH}
+      --maxmemory-policy noeviction
+    environment:
+      REDISCLI_AUTH: ${LANGFUSE_REDIS_AUTH}  # lets the healthcheck authenticate
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      # grep for PONG: a bare `redis-cli ping` exits 0 even on an auth error.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  # MinIO (S3-compatible): raw ingested events are written here before ClickHouse.
+  # Chainguard publishes only `latest` for free, so it is pinned by digest.
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:dc455cdd4db6e390b1b26514f15ff37681a777bf8dab41aac445a0259f751e56
+    container_name: dfsa-langfuse-minio
+    restart: unless-stopped
+    entrypoint: sh
+    # create the bucket directory, then serve S3 on 9000 (console on 9001, not published)
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD}
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
 volumes:
   qdrant_data:
+  langfuse_postgres_data:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+  langfuse_redis_data:
