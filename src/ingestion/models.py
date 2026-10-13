@@ -54,8 +54,28 @@ class Chunk(BaseModel):
     deleted: bool = False
     page_start: int
     page_end: int
-    token_count: int
+    token_count: int  # tokens of embedding_text(): what the embedder and reranker see
+
+    # A chunk over max_chunk_tokens is split into parts. The whole chunk is kept
+    # (for LLM context, not embedded) and lists its parts; each part points back.
+    parts: list[str] = Field(default_factory=list)  # whole -> ["COB 3.3.2#p1", ...]
+    part_of: str | None = None  # part -> "COB 3.3.2"
+    part: int | None = None  # 1-based part number
+
+    cross_refs: list[str] = Field(default_factory=list)  # ["GEN 2.26.1", "COB 3.3.4", ...]
 
     @property
     def embedded(self) -> bool:
-        return self.chunk_type in EMBEDDED_TYPES and not self.deleted
+        return self.chunk_type in EMBEDDED_TYPES and not self.deleted and not self.parts
+
+    def embedding_text(self) -> str:
+        return embedding_text(self.header_text, self.text)
+
+
+def embedding_text(header: str, text: str) -> str:
+    """The exact string sent to the embedding model (and the reranker).
+
+    Defined once here so token counting, splitting, embedding and reranking
+    all agree on it.
+    """
+    return f"{header}\n\n{text}"

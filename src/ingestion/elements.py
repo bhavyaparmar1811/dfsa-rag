@@ -161,6 +161,16 @@ def merge_margin_numbers(elements: list[Element]) -> list[Element]:
     return result
 
 
+def compact_markdown(markdown: str) -> str:
+    """Docling pads table cells with spaces to align columns; that costs tokens
+    and carries no meaning, so collapse it."""
+    lines = []
+    for line in markdown.strip().splitlines():
+        line = re.sub(r"-{3,}", "---", line)
+        lines.append(re.sub(r"[ \t]{2,}", " ", line).strip())
+    return "\n".join(lines)
+
+
 def collapse_row(cells: list[str]) -> list[str]:
     """Drop empty cells and the copies Docling makes of a cell spanning columns."""
     out: list[str] = []
@@ -211,17 +221,30 @@ def table_elements(
             out.append(Element("text", text, page, round(top, 1), round(left, 1)))
         return out
 
-    markdown = item.export_to_markdown(doc).strip()
+    first = collapse_row(rows[0]) if rows else []
+    numbered = len(first) == 1 and BARE_RULE_NUMBER.match(first[0])
+    # A data table headed by a rule number (MKT "A1.1.1") is that rule's body:
+    # emit the number first so the chunker opens the rule, and drop that row so
+    # the real column headings become the table's header row.
+    markdown = to_markdown(rows[1:] if numbered else rows)
     if not markdown:
         return []
     table = Element(DocItemLabel.TABLE.value, markdown, page, round(box.t, 1), round(box.l, 1))
-    first = collapse_row(rows[0]) if rows else []
-    if len(first) == 1 and BARE_RULE_NUMBER.match(first[0]):
-        # A data table headed by a rule number (MKT "A1.1.1"): the table is that
-        # rule's body. Emit the number first so the chunker opens the rule.
+    if numbered:
         number = Element("text", first[0], page, round(box.t - 0.1, 1), round(box.l, 1))
         return [number, table]
     return [table]
+
+
+def to_markdown(rows: list[list[str]]) -> str:
+    """A compact Markdown table; the first non-empty row is the header row."""
+    rows = [r for r in rows if any(r)]
+    if not rows:
+        return ""
+    cells = [[c.replace("|", "/") for c in r] for r in rows]
+    lines = ["| " + " | ".join(cells[0]) + " |", "|" + "---|" * len(cells[0])]
+    lines += ["| " + " | ".join(r) + " |" for r in cells[1:]]
+    return "\n".join(lines)
 
 
 def _figure_boxes(doc: DoclingDocument) -> dict[int, list[BoundingBox]]:

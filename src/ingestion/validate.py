@@ -60,7 +60,8 @@ def report(
 ) -> dict:
     children = [c for c in chunks if c.chunk_type != ChunkType.SECTION]
     embedded = [c for c in children if c.embedded]
-    rules = [c for c in children if c.chunk_type == ChunkType.RULE]
+    whole = [c for c in children if c.part is None]  # parts of a split chunk count once
+    rules = [c for c in whole if c.chunk_type == ChunkType.RULE]
     # Real sections only; chapter-level containers ("3", "APP2") are not TOC entries.
     sections = {
         c.section
@@ -82,9 +83,9 @@ def report(
         "counts": {
             "rules": len(rules),
             "deleted_rules": sum(c.deleted for c in rules),
-            "guidance": sum(c.chunk_type == ChunkType.GUIDANCE for c in children),
+            "guidance": sum(c.chunk_type == ChunkType.GUIDANCE for c in whole),
             "section_guidance": sum(
-                c.chunk_type == ChunkType.GUIDANCE and c.rule_number is None for c in children
+                c.chunk_type == ChunkType.GUIDANCE and c.rule_number is None for c in whole
             ),
             "sections": len(sections),
             "embedded_chunks": len(embedded),
@@ -104,6 +105,12 @@ def report(
             "front_matter": issues.skipped_front_matter,
             "running_headers": issues.skipped_running_headers,
         },
+        "split": {
+            "chunks_split": sum(bool(c.parts) for c in children),
+            "parts": sum(c.part is not None for c in children),
+            "still_over_max": [c.key for c in embedded if c.token_count > max_chunk_tokens],
+        },
+        "refs": _refs_report(chunks),
         "furniture_leaks": [c.key for c in chunks if FURNITURE_LEAK.search(c.text)],
         "empty_chunks": [c.key for c in children if len(c.text.strip()) < 20 and not c.deleted],
         "tokens": {
@@ -119,6 +126,32 @@ def report(
             ],
             "histogram": histogram,
         },
+    }
+
+
+def _refs_report(chunks: list[Chunk]) -> dict:
+    """Do in-module references point at something that exists?"""
+    module = chunks[0].module if chunks else ""
+    whole = [c for c in chunks if c.part is None]
+    known = {c.key for c in whole} | {c.citation for c in whole}
+    sections = {c.section for c in chunks if c.chunk_type == ChunkType.SECTION}
+    known |= {f"{module} {s.split('.')[0]}" for s in sections if not s.startswith("A")}
+    known |= {f"{module} App{s[1:].split('.')[0]}" for s in sections if s.startswith("A")}
+
+    unresolved, external = [], {}
+    for c in whole:
+        for ref in c.cross_refs:
+            if ref.startswith(f"{module} "):
+                if ref not in known:
+                    unresolved.append(f"{c.key} -> {ref}")
+            else:
+                target = ref.rsplit(" ", 1)[0] if " Art. " not in ref else ref.split(" Art. ")[0]
+                external[target] = external.get(target, 0) + 1
+    return {
+        "chunks_with_refs": sum(bool(c.cross_refs) for c in whole),
+        "total_refs": sum(len(c.cross_refs) for c in whole),
+        "unresolved_in_module": unresolved,
+        "external_targets": dict(sorted(external.items(), key=lambda kv: -kv[1])),
     }
 
 

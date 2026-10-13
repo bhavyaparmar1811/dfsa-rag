@@ -57,3 +57,18 @@ def test_report_is_clean(cob):
     assert report["rule_gaps"] == ["6.10.3", "7.12.3", "7.12.4"]  # absent from the PDF itself
     assert report["furniture_leaks"] == [] and report["loose_text"] == []
     assert report["rejected_numbers"] == []
+
+
+def test_no_embedded_chunk_exceeds_the_limit(cob):
+    _, report = cob
+    assert report["split"]["still_over_max"] == []
+    assert report["split"]["chunks_split"] > 0
+
+
+def test_cross_references_resolve(cob):
+    chunks, report = cob
+    assert "COB 3.3.4" in chunks["COB 3.3.2"]["cross_refs"]
+    assert "GEN 2.26.1" in chunks["COB 3.3.1"]["cross_refs"]
+    # The only dangling in-module reference is a typo in the source PDF itself:
+    # Guidance on 6.16.4 cites "Rule 16.6.4(1)", and COB has no chapter 16.
+    assert report["refs"]["unresolved_in_module"] == ["COB 6.16.4 Guidance -> COB 16.6.4"]

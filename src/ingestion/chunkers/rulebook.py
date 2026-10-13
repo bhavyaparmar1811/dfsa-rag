@@ -23,7 +23,7 @@ from src.ingestion.elements import Element
 from src.ingestion.header import build_header
 from src.ingestion.ids import chunk_id
 from src.ingestion.manifest import ManifestEntry
-from src.ingestion.models import Chunk, ChunkType
+from src.ingestion.models import Chunk, ChunkType, embedding_text
 
 NumKey = tuple[bool, tuple[tuple[int, str], ...]]
 
@@ -360,6 +360,7 @@ class RulebookChunker:
     def _make_chunk(self, *, kind, key, citation, section, text, pages, order, **extra) -> Chunk:
         e = self.entry
         heading_path = self._heading_path(section, extra.get("subheading"))
+        header = build_header(heading_path, kind, citation)
         return Chunk(
             chunk_id=chunk_id(e.id, e.version, key),
             key=key,
@@ -375,11 +376,11 @@ class RulebookChunker:
             section=section.number,
             order=order,
             heading_path=heading_path,
-            header_text=build_header(heading_path, kind, citation),
+            header_text=header,
             text=text,
             page_start=min(pages),
             page_end=max(pages),
-            token_count=self.count_tokens(text),
+            token_count=self.count_tokens(embedding_text(header, text)),
             **extra,
         )
 

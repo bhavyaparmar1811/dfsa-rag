@@ -24,6 +24,8 @@ from src.ingestion.chunkers.rulebook import RulebookChunker
 from src.ingestion.elements import to_elements
 from src.ingestion.manifest import ManifestEntry, load_manifest
 from src.ingestion.parse import parse
+from src.ingestion.refs import annotate
+from src.ingestion.split import Splitter
 from src.ingestion.validate import report, toc_sections
 
 logger = logging.getLogger(__name__)
@@ -41,10 +43,21 @@ def _encoding(name: str) -> tiktoken.Encoding:
     return tiktoken.get_encoding(name)
 
 
-def chunk_document(entry: ManifestEntry, cfg: ChunkingSettings, paths: PathSettings) -> dict:
+def chunk_document(
+    entry: ManifestEntry,
+    cfg: ChunkingSettings,
+    paths: PathSettings,
+    module_codes: set[str] | None = None,
+) -> dict:
     doc = parse(entry, paths=paths)
     encoding = _encoding(cfg.tokenizer)
-    result = RulebookChunker(entry, lambda t: len(encoding.encode(t))).chunk(to_elements(doc))
+
+    def count(text: str) -> int:
+        return len(encoding.encode(text))
+
+    result = RulebookChunker(entry, count).chunk(to_elements(doc))
+    chunks = Splitter(count, cfg.max_chunk_tokens).split_chunks(result.chunks)
+    chunks = annotate(chunks, module_codes or {entry.module_code})
 
     chunks_dir = paths.parsed_dir / "chunks"
     reports_dir = paths.parsed_dir / "reports"
@@ -52,11 +65,11 @@ def chunk_document(entry: ManifestEntry, cfg: ChunkingSettings, paths: PathSetti
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     with (chunks_dir / f"{entry.id}.jsonl").open("w", encoding="utf-8", newline="\n") as f:
-        for chunk in result.chunks:
+        for chunk in chunks:
             f.write(chunk.model_dump_json() + "\n")
 
     rep = report(
-        result.chunks,
+        chunks,
         result.issues,
         toc=toc_sections(doc),
         rerank_warn_tokens=cfg.rerank_warn_tokens,
@@ -104,12 +117,13 @@ def main() -> int:
         logger.error("No manifest entry with id %r.", args.doc)
         return 1
 
+    codes = {e.module_code for e in load_manifest() if e.doc_type == "rulebook"}
     reports = []
     for entry in entries:
         if not supported(entry):
             logger.info("%s: no chunker yet for this document type, skipped", entry.id)
             continue
-        reports.append(chunk_document(entry, cfg, paths))
+        reports.append(chunk_document(entry, cfg, paths, codes))
     if reports:
         print_summary(reports, cfg)
     return 0
