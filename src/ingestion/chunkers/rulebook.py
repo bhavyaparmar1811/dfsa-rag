@@ -33,7 +33,6 @@ class _Section:
     number: str  # "3.3" or "A2.1"; "3" or "APP2" for a chapter-level container
     title: str | None
     chapter_label: str
-    loose_text: list[str] = field(default_factory=list)  # text outside any rule/Guidance
     # Holds Guidance/text that sits directly under a chapter or appendix heading,
     # before its first section (e.g. COB chapter 3's introductory Guidance).
     is_container: bool = False
@@ -65,9 +64,12 @@ class ChunkIssues:
     rejected_numbers: list[str] = field(default_factory=list)  # "p.42 3.5.4 ...: reason"
     implicit_sections: list[str] = field(default_factory=list)  # sections with no heading seen
     deleted_sections: list[str] = field(default_factory=list)  # "5.4 Deleted": no parent chunk
-    loose_text: list[str] = field(default_factory=list)  # text outside rules/Guidance
+    loose_text: list[str] = field(default_factory=list)  # text outside any section
+    unnumbered_text: list[str] = field(default_factory=list)  # became "text" chunks
+    repeated_numbers: int = 0  # a rule number repeated above its table on a later page
     skipped_front_matter: int = 0
     skipped_running_headers: int = 0
+    skipped_figure_text: list[str] = field(default_factory=list)  # from "Figure N." on
 
 
 @dataclass
@@ -107,6 +109,9 @@ class RulebookChunker:
         self.subheading: str | None = None
         self.in_application = False
         self.unit: _Unit | None = None
+        self.in_figure = False
+        self.redirect: _Unit | None = None  # earlier rule that following tables belong to
+        self._redirect_set_now: _Unit | None = None
         self.units: list[_Unit] = []
         self.last_rule: NumKey | None = None
         self.last_section: NumKey | None = None
@@ -119,18 +124,38 @@ class RulebookChunker:
             self.issues.skipped_running_headers += 1
             return
 
+        if self.started and P.FIGURE_CAPTION.match(text):
+            # Images are out of scope. A figure drawn with real text (AML Figure 4)
+            # comes through as headings and bullets, so skip everything from its
+            # caption to the next structural element.
+            self._close_unit()
+            self.in_figure = True
+            self.issues.skipped_figure_text.append(f"p.{el.page} {text[:60]!r}")
+            return
+
         if el.is_heading and P.GUIDANCE.match(text):
             if self.started:
+                self.in_figure = False
                 self._open_guidance(el)
             return
 
-        if not el.is_table and self._try_chapter(el):
+        if not el.is_table and (
+            self._try_chapter(el)
+            or self._try_appendix(el)
+            or self._try_rule(el)
+            or self._try_section(el, nxt)
+        ):
+            self.in_figure = False
+            self.redirect = None if self.redirect is not self._redirect_set_now else self.redirect
+            self._redirect_set_now = None
             return
-        if not el.is_table and self._try_appendix(el):
+        if self.redirect is not None:
+            # Until the next structural element, everything (table pages, their
+            # footnotes) belongs to the rule whose number heads the table.
+            self.redirect.add(el)
             return
-        if not el.is_table and self._try_rule(el):
-            return
-        if not el.is_table and self._try_section(el, nxt):
+        if self.in_figure:
+            self.issues.skipped_figure_text.append(f"p.{el.page} {text[:60]!r}")
             return
         if el.is_heading and self.started:
             self._subheading(el, nxt)
@@ -193,6 +218,17 @@ class RulebookChunker:
             elif self.last_section is not None and (is_app, key[1][:-1]) <= self.last_section:
                 reason = f"section {section_id} is not after the current section"
         if reason:
+            # MKT's appendix tables repeat their rule number ("A1.1.1") above the
+            # table on every page, after the rule's own text has moved on. A bare,
+            # already-seen number therefore sends the table(s) after it to that rule.
+            earlier = self._rule_unit(label)
+            rest = m.group("rest").strip()
+            if earlier is not None and (not rest or self.redirect is earlier):
+                if rest:  # the number run together with the table's column titles
+                    earlier.add(el)
+                self.redirect = self._redirect_set_now = earlier
+                self.issues.repeated_numbers += 1
+                return True
             self.issues.rejected_numbers.append(f"p.{el.page} {el.text[:60]!r}: {reason}")
             return False
 
@@ -276,9 +312,15 @@ class RulebookChunker:
             self.issues.skipped_front_matter += 1
         elif self.unit is not None:
             self.unit.add(el)
+        elif self.section is not None and P.DELETED.match(el.text):
+            # "10.1 Application" followed by "[deleted]": the section's content is gone.
+            self.issues.deleted_sections.append(self.section.number)
         elif (section := self._current_section()) is not None:
-            section.loose_text.append(el.text)
-            self.issues.loose_text.append(f"p.{el.page} {section.number}: {el.text[:60]!r}")
+            # Text that is neither a numbered Rule nor under a Guidance label (e.g.
+            # MKT App4, a whole appendix of best-practice standards). It still has
+            # to be retrievable, so it becomes a non-binding "text" chunk.
+            self._open_text(section, el)
+            self.unit.add(el)
         else:
             self.issues.loose_text.append(f"p.{el.page} (no section) {el.text[:60]!r}")
 
@@ -306,6 +348,30 @@ class RulebookChunker:
             subheading=self.subheading,
             scope_rule=False,
         )
+
+    def _open_text(self, section: _Section, el: Element) -> None:
+        target = f"{self.module} {section.number}"
+        key = f"{target} Text"
+        n = sum(1 for u in self.units if u.key == key or u.key.startswith(f"{key} ("))
+        if n:
+            key = f"{key} ({n + 1})"
+        self.unit = _Unit(
+            kind=ChunkType.TEXT,
+            key=key,
+            citation=target,
+            section=section,
+            rule_number=None,
+            guidance_for=None,
+            subheading=self.subheading,
+            scope_rule=False,
+        )
+        self.issues.unnumbered_text.append(f"p.{el.page} {key}: {el.text[:50]!r}")
+
+    def _rule_unit(self, label: str) -> _Unit | None:
+        for u in [self.unit, *reversed(self.units)]:
+            if u is not None and u.kind == ChunkType.RULE and u.rule_number == label:
+                return u
+        return None
 
     # ---- helpers ------------------------------------------------------------------
 
@@ -366,7 +432,7 @@ class RulebookChunker:
             key=key,
             citation=citation,
             chunk_type=kind,
-            binding=kind != ChunkType.GUIDANCE,
+            binding=kind == ChunkType.RULE,
             doc_id=e.id,
             regulator=e.regulator,
             module=self.module,
@@ -422,7 +488,7 @@ class RulebookChunker:
         parents = []
         for number, section in self.sections.items():
             kids = by_section.get(number, [])
-            lines = list(section.loose_text)
+            lines: list[str] = []
             subheading = None
             for c in kids:
                 if c.deleted:

@@ -12,6 +12,7 @@ from docling_core.types.doc import DocItemLabel, DoclingDocument
 
 from src.ingestion import patterns as P
 from src.ingestion.chunkers.rulebook import ChunkIssues
+from src.ingestion.elements import TOC_LINE, is_toc
 from src.ingestion.models import Chunk, ChunkType
 
 FURNITURE_LEAK = re.compile(r"/VER\d+/\d{2}-\d{2}")
@@ -26,12 +27,18 @@ def toc_sections(doc: DoclingDocument) -> set[str]:
     """Section numbers listed in the document's table of contents."""
     found: set[str] = set()
     for item, _level in doc.iterate_items():
-        if item.label != DocItemLabel.DOCUMENT_INDEX:
-            continue
-        for cell in getattr(getattr(item, "data", None), "table_cells", []):
-            tokens = cell.text.split()
-            if tokens and all(TOC_SECTION.match(t) for t in tokens):
-                found.update(tokens)
+        if item.label == DocItemLabel.DOCUMENT_INDEX and is_toc(item):
+            for cell in getattr(getattr(item, "data", None), "table_cells", []):
+                tokens = cell.text.split()
+                if tokens and all(TOC_SECTION.match(t) for t in tokens):
+                    found.update(tokens)
+                elif tokens and TOC_SECTION.match(tokens[0]):
+                    found.add(tokens[0])  # number and title merged: "2.3 By way of ..."
+        # TOC lines Docling didn't put in its TOC table: "9.3 Circumstances ... 22".
+        elif (text := getattr(item, "text", "")) and TOC_LINE.search(text):
+            number = text.split(" ", 1)[0]
+            if TOC_SECTION.match(number):
+                found.add(number)
     return found
 
 
@@ -84,6 +91,7 @@ def report(
             "rules": len(rules),
             "deleted_rules": sum(c.deleted for c in rules),
             "guidance": sum(c.chunk_type == ChunkType.GUIDANCE for c in whole),
+            "text": sum(c.chunk_type == ChunkType.TEXT for c in whole),
             "section_guidance": sum(
                 c.chunk_type == ChunkType.GUIDANCE and c.rule_number is None for c in whole
             ),
@@ -101,9 +109,12 @@ def report(
         "rejected_numbers": issues.rejected_numbers,
         "implicit_sections": issues.implicit_sections,
         "loose_text": issues.loose_text,
+        "unnumbered_text": issues.unnumbered_text,
+        "repeated_numbers": issues.repeated_numbers,
         "skipped": {
             "front_matter": issues.skipped_front_matter,
             "running_headers": issues.skipped_running_headers,
+            "figure_text": issues.skipped_figure_text,
         },
         "split": {
             "chunks_split": sum(bool(c.parts) for c in children),
@@ -136,7 +147,9 @@ def _refs_report(chunks: list[Chunk]) -> dict:
     known = {c.key for c in whole} | {c.citation for c in whole}
     sections = {c.section for c in chunks if c.chunk_type == ChunkType.SECTION}
     known |= {f"{module} {s.split('.')[0]}" for s in sections if not s.startswith("A")}
-    known |= {f"{module} App{s[1:].split('.')[0]}" for s in sections if s.startswith("A")}
+    known |= {f"{module} App{s[1:].split('.')[0]}" for s in sections if s[1:2].isdigit()}
+    # An appendix holding only text has a container ("APP4") and no A4.x sections.
+    known |= {f"{module} App{s[3:]}" for s in sections if s.startswith("APP")}
 
     unresolved, external = [], {}
     for c in whole:

@@ -32,3 +32,19 @@ def test_reference_forms(text, refs):
 )
 def test_not_references(text):
     assert extract_refs(text, "COB") == []
+
+
+@pytest.mark.parametrize(
+    "text, module, refs",
+    [
+        ("only defined under Rule 1.2.1 of PIB rather than", "GEN", ["PIB 1.2.1"]),
+        ("see section 3.2.15 of the RPP Sourcebook", "GEN", ["RPP 3.2.15"]),
+        ("referred to in Rule 3A.3.4 of the Previous Regime", "GEN", ["Previous Regime 3A.3.4"]),
+        ("section 6.2, of the General (GEN) module", "AML", ["GEN 6.2"]),
+        ("in accordance with the Rules in AUD App8, if", "GEN", ["AUD App8"]),
+        # A capitalised Defined Term after "of the" is not a document.
+        ("the requirements of Rule 6.1.2 of the Fund Manager", "FPR", ["FPR 6.1.2"]),
+    ],
+)
+def test_document_named_after_the_reference(text, module, refs):
+    assert extract_refs(text, module) == refs

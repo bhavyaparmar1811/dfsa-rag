@@ -1,8 +1,12 @@
+from types import SimpleNamespace
+
 from src.ingestion.elements import (
     Element,
     clean,
     collapse_row,
     is_layout_table,
+    is_toc,
+    layout_row_texts,
     merge_margin_numbers,
     sort_reading_order,
 )
@@ -77,3 +81,28 @@ def test_data_table_is_kept_as_a_table():
     assert not is_layout_table(rows)
     # GLO-style two-column table: first column is a term, not a marker.
     assert not is_layout_table([["Retail Client", "A Client who is not ..."]])
+
+
+def test_rule_number_spanning_rows_is_kept_once():
+    # FPR p.14: Docling repeats a row-spanning "3.2.3" cell in every row.
+    rows = [
+        ["3.2.3", "The notice referred to in Rule 3.2.2 must:"],
+        ["3.2.3", "(a) be in such form as the DFSA may require;"],
+        ["3.2.3", "(b) include a certification."],
+    ]
+    assert layout_row_texts(rows) == [
+        "3.2.3 The notice referred to in Rule 3.2.2 must:",
+        "(a) be in such form as the DFSA may require;",
+        "(b) include a certification.",
+    ]
+
+
+def test_only_a_table_of_contents_with_dot_leaders_is_dropped():
+    def item(*cells):
+        return SimpleNamespace(
+            data=SimpleNamespace(table_cells=[SimpleNamespace(text=c) for c in cells])
+        )
+
+    assert is_toc(item("3.3", "Key information and Client Agreement ..........", "26"))
+    # FPR p.19: rule pages that Docling labelled as a table of contents.
+    assert not is_toc(item("6.1", "Compliance with Constitution", "6.1.1", "This section applies"))

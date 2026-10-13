@@ -36,6 +36,8 @@ def build_header(
         parts.append(f"Rule {citation}")
     elif chunk_type == ChunkType.GUIDANCE:
         parts.append(f"Guidance on {citation} (non-binding)")
+    elif chunk_type == ChunkType.TEXT:
+        parts.append(f"Text in {citation} (not a numbered Rule, non-binding)")
     header = " > ".join(parts)
     if part is not None:
         header += f" (part {part} of {total_parts})"

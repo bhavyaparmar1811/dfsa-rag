@@ -21,7 +21,7 @@ NUM = r"\d+[A-Z]?"
 # "3.3.2 ..." or "A2.1.1 ...". The number must be followed by whitespace or
 # end of text, so "3.3.2(1)(b)" inside a sentence never matches (and a rule
 # reference only matches if an element *starts* with it).
-RULE = re.compile(rf"^(?P<app>A)?(?P<num>{NUM}\.{NUM}\.{NUM})(?=\s|$)\s*(?P<rest>.*)$", re.S)
+RULE = re.compile(rf"^(?P<app>A\.?)?(?P<num>{NUM}\.{NUM}\.{NUM})(?=\s|$)\s*(?P<rest>.*)$", re.S)
 
 # "3.3 Key information ..." / "A2.1 Core information". The title must start
 # with a capital (or a quote/bracket), so "2.5 per cent of ..." doesn't match.
@@ -34,6 +34,9 @@ CHAPTER = re.compile(rf"^(?P<num>{NUM})\.?\s+(?P<title>[A-Z][A-Z0-9 ,&()'’/:\-
 APPENDIX = re.compile(r"^APP\s?(?P<num>\d+)\s+(?P<title>.+)$")
 
 GUIDANCE = re.compile(r"^Guidance(\s+notes?)?:?$")
+
+# A figure caption: "Figure 4. CDD". Figures are out of scope (see the chunker).
+FIGURE_CAPTION = re.compile(r"^Figure\s+\d+[.:]\s")
 
 # What follows a rule number when the rule has been removed: "[Deleted]", "Deleted".
 DELETED = re.compile(r"^\[?Deleted\]?\.?$", re.I)

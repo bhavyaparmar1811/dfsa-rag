@@ -37,7 +37,6 @@ from docling_core.types.doc import (
 SKIP_LABELS = {
     DocItemLabel.PICTURE,
     DocItemLabel.CAPTION,
-    DocItemLabel.DOCUMENT_INDEX,
     DocItemLabel.PAGE_HEADER,
     DocItemLabel.PAGE_FOOTER,
 }
@@ -48,11 +47,11 @@ TOC_LINE = re.compile(r"(\.{3,}|…)\s*\d{1,3}\s*$")
 PAGE_NUMBER = re.compile(r"^\d{1,4}$")
 # A rule number standing alone, e.g. printed in the left margin of AML.
 BARE_RULE_NUMBER = re.compile(r"^A?\d+[A-Z]?\.\d+[A-Z]?\.\d+[A-Z]?$")
-# What the first column of a "layout table" holds: nothing, a rule or section
-# number ("3.1.8", "3.2", "14.2.3 (1)", "A7.2.1"), or a sub-item marker
-# ("(1)", "(c)", "(ii)", "1.").
+# What the first column of a "layout table" holds: nothing, a chapter, section
+# or rule number ("6", "3.2", "3.1.8", "14.2.3 (1)", "A7.2.1"), or a sub-item
+# marker ("(1)", "(c)", "(ii)", "1.").
 LAYOUT_MARKER = re.compile(
-    r"^(|A?\d+[A-Z]?(\.\d+[A-Z]?){1,2}(\s*\(\d+\))?|\(\d+\)|\(?[a-z]{1,5}\)|\d+\.)$"
+    r"^(|A?\d+[A-Z]?(\.\d+[A-Z]?){0,2}(\s*\(\d+\))?|\(\d+\)|\(?[a-z]{1,5}\)|\d+\.)$"
 )
 # Pictures smaller than this (in points) are logos or decorations, too small
 # to contain text worth excluding by position.
@@ -95,6 +94,8 @@ def to_elements(doc: DoclingDocument) -> list[Element]:
     ):
         if item.label in SKIP_LABELS or not item.prov:
             continue
+        if item.label == DocItemLabel.DOCUMENT_INDEX and is_toc(item):
+            continue  # the real table of contents
         prov = item.prov[0]
         box = prov.bbox.to_top_left_origin(doc.pages[prov.page_no].size.height)
 
@@ -171,6 +172,18 @@ def compact_markdown(markdown: str) -> str:
     return "\n".join(lines)
 
 
+def is_toc(item: TableItem) -> bool:
+    """Is a `document_index` item really the table of contents?
+
+    Docling sometimes labels pages of rules as a TOC because of their number
+    column (FPR pp.19 and 25: chapter 6 and sections 9.1-9.4). Every real TOC
+    in the corpus has dot leaders ("Application ......... 3"); those pages
+    have none, so they are kept as content.
+    """
+    cells = getattr(getattr(item, "data", None), "table_cells", [])
+    return any(re.search(r"\.{3,}|…", c.text) for c in cells)
+
+
 def collapse_row(cells: list[str]) -> list[str]:
     """Drop empty cells and the copies Docling makes of a cell spanning columns."""
     out: list[str] = []
@@ -197,6 +210,20 @@ def is_layout_table(rows: list[list[str]]) -> bool:
     )
 
 
+def layout_row_texts(rows: list[list[str]]) -> list[str]:
+    """One line of text per row of a layout table.
+
+    A rule number spanning several rows is repeated by Docling in each of them
+    ("3.2.3 (a)", "3.2.3 (b)"), so it's kept on the first row only.
+    """
+    out = []
+    for i, row in enumerate(rows):
+        if i and row and row[0] and row[0] == rows[i - 1][0]:
+            row = ["", *row[1:]]
+        out.append(" ".join(collapse_row(row)))
+    return out
+
+
 def table_elements(
     item: TableItem, doc: DoclingDocument, page: int, box: BoundingBox
 ) -> list[Element]:
@@ -206,8 +233,7 @@ def table_elements(
 
     if is_layout_table(rows):
         out = []
-        for i, (row, cells) in enumerate(zip(rows, grid, strict=True)):
-            text = " ".join(collapse_row(row))
+        for i, (text, cells) in enumerate(zip(layout_row_texts(rows), grid, strict=True)):
             if not text:
                 continue
             # Each row becomes an ordinary text element at its own position.

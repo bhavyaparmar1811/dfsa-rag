@@ -200,3 +200,73 @@ def test_running_header_is_dropped(running_header):
     )
     assert running_header not in chunks["COB 3.3.1"].text
     assert issues.skipped_running_headers == 1
+
+
+def test_text_drawn_figure_is_skipped_until_the_next_structure():
+    # AML Figure 4 is drawn with real text: box titles come through as headings.
+    chunks, issues = run(
+        h("7 CUSTOMER DUE DILIGENCE"),
+        t("Figure 4. CDD"),
+        h("Enhanced CDD 7.4.1"),
+        t("· Obtain and verify:"),
+        t("- Source of wealth"),
+        h("7.1 Application"),
+        t("7.1.1 This chapter applies to every Relevant Person."),
+    )
+    assert all("Source of wealth" not in c.text for c in chunks.values())
+    assert "COB 7.1.1" in chunks and chunks["COB 7.1.1"].subheading is None
+    assert len(issues.skipped_figure_text) == 4
+
+
+def test_section_with_deleted_content():
+    chunks, issues = run(
+        h("10 SANCTIONS"),
+        h("10.1 Application"),
+        t("[deleted]"),
+        h("10.2 Relevant resolutions"),
+        t("10.2.1 A Relevant Person must"),
+    )
+    assert issues.deleted_sections == ["10.1"] and "COB 10.1" not in chunks
+
+
+def test_unnumbered_text_becomes_a_non_binding_text_chunk():
+    # MKT App4: a whole appendix of best-practice standards with no rule numbers.
+    chunks, _ = run(
+        h("9 LAST CHAPTER"),
+        h("9.1 Application"),
+        t("9.1.1 A rule"),
+        h("APP4 CORPORATE GOVERNANCE BEST PRACTICE"),
+        t("1. This Appendix sets out, by way of Guidance, best practice standards."),
+        t("2. A Reporting Entity must explain any departure."),
+    )
+    text = chunks["COB APP4 Text"]
+    assert text.chunk_type == "text" and not text.binding and text.embedded
+    assert text.citation == "COB APP4" and "2. A Reporting Entity" in text.text
+    assert "not a numbered Rule" in text.header_text
+
+
+def test_dotted_appendix_numbers_and_repeated_table_number():
+    # MKT App1: "A.1.1.1" in the text; the table it describes is headed "A1.1.1"
+    # and the number is repeated above the table on each later page.
+    table = Element("table", "| Item | Shares |\n|---|---|\n| 1.1 General | yes |", 1, 0.0, 47.0)
+    more = Element("table", "| Item | Shares |\n|---|---|\n| 2.1 Business | yes |", 2, 0.0, 47.0)
+    chunks, issues = run(
+        h("APP 1 CONTENT OF A PROSPECTUS"),
+        h("A1.1 Registration statement"),
+        t("A.1.1.1 This table forms part of Rule 2.5.1(3)(b)."),
+        t("A.1.1.2 (1) The reference to an 'issuer' is a reference to the Person."),
+        t("A1.1.1"),
+        table,
+        t("1 Applicable laws include any laws in the jurisdiction."),  # a table footnote
+        t("A1.1.1", page=2),
+        more,
+        h("A1.2 Securities note", page=3),
+        t("A.1.2.1 This table forms part of Rule 2.5.1(3)(c).", page=3),
+    )
+    assert (
+        "1.1 General" in chunks["COB A1.1.1"].text and "2.1 Business" in chunks["COB A1.1.1"].text
+    )
+    assert "Applicable laws" in chunks["COB A1.1.1"].text
+    assert "General" not in chunks["COB A1.1.2"].text
+    assert issues.repeated_numbers == 2 and issues.rejected_numbers == []
+    assert "COB A1.2.1" in chunks

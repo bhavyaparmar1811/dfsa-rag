@@ -15,10 +15,13 @@ from pydantic import BaseModel, Field
 class ChunkType(StrEnum):
     RULE = "rule"
     GUIDANCE = "guidance"
+    # Text that is neither a numbered Rule nor labelled Guidance, e.g. an
+    # appendix of best-practice standards. Embedded, but never presented as binding.
+    TEXT = "text"
     SECTION = "section"  # parent: stored, never embedded
 
 
-EMBEDDED_TYPES = {ChunkType.RULE, ChunkType.GUIDANCE}
+EMBEDDED_TYPES = {ChunkType.RULE, ChunkType.GUIDANCE, ChunkType.TEXT}
 
 
 class Chunk(BaseModel):
@@ -26,7 +29,7 @@ class Chunk(BaseModel):
     key: str  # unique within a document version: "COB 3.3.2", "COB 3.3.2 Guidance", "COB 3.3"
     citation: str  # what an answer cites: "COB 3.3.2" (Guidance cites the rule it explains)
     chunk_type: ChunkType
-    binding: bool  # Rules bind; Guidance does not
+    binding: bool  # only Rules bind; Guidance and unnumbered text do not
 
     doc_id: str
     regulator: str

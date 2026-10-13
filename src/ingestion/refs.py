@@ -59,6 +59,16 @@ def _module_ref(codes: set[str]) -> re.Pattern:
 
 LOCAL_REF = re.compile(rf"\b{KIND}\s+{NUM_LIST}")
 
+# A reference whose document comes after it:
+#   "Rule 1.2.1 of PIB", "section 6.2, of the General (GEN)",
+#   "section 3.2.15 of the RPP Sourcebook", "Rule 3A.3.4 of the Previous Regime".
+POSTFIX = re.compile(r"^,?\s+of\s+(?:the\s+)?(?P<target>[A-Z][^.;:,]{0,60})")
+POSTFIX_CODE = re.compile(r"^(?P<code>[A-Z]{3,4})\b|\((?P<paren>[A-Z]{3,4})\)")
+# Without a module code, the target must name a document; otherwise "Rule 6.1.2
+# of the Fund ..." (a capitalised Defined Term) would be read as external.
+DOCUMENT_WORDS = re.compile(r"\b(Law|Rules|Regulations|Sourcebook|Regime|[Mm]odule|Code)\b")
+CAPITALISED_RUN = re.compile(r"(?:[A-Z][\w'-]*\s?)+")
+
 
 def extract_refs(text: str, module: str, codes: set[str] | None = None) -> list[str]:
     """Normalised references found in `text`, in order of first appearance."""
@@ -70,25 +80,51 @@ def extract_refs(text: str, module: str, codes: set[str] | None = None) -> list[
         if ref not in refs:
             refs.append(ref)
 
+    def is_taken(pos: int) -> bool:
+        return any(s <= pos < e for s, e in taken)
+
+    known = "|".join(sorted(codes))
+    for m in re.finditer(rf"\b(?P<mod>{known})\s+App(?:endix)?\s?(?P<num>\d+)\b", text):
+        taken.append(m.span())  # "AUD App8": another module's appendix
+        add(f"{m.group('mod')} App{m.group('num')}")
+
     for m in _module_ref(codes).finditer(text):
+        if is_taken(m.start()):
+            continue
         taken.append(m.span())
         mod = m.group("mod") or m.group("anymod")
         for num in _numbers(m.group("nums")):
             add(f"{mod} {num}")
 
     for m in LOCAL_REF.finditer(text):
-        if any(s <= m.start() < e for s, e in taken):
+        if is_taken(m.start()):
             continue  # already read as "GEN Rule ..."
+        target = _postfix_target(text[m.end() : m.end() + 80])
         for num in _numbers(m.group("nums")):
-            add(f"{module} {num}")
+            add(f"{target or module} {num}")
 
     for m in APPENDIX.finditer(text):
-        add(f"{module} App{m.group('num')}")
+        if not is_taken(m.start()):
+            add(f"{module} App{m.group('num')}")
 
     for m in ARTICLE.finditer(text):
         add(f"{m.group('law').strip()} Art. {m.group('num')}")
 
     return refs
+
+
+def _postfix_target(after: str) -> str | None:
+    """The document named right after a reference ("... of PIB"), if any."""
+    m = POSTFIX.match(after)
+    if not m:
+        return None
+    target = m.group("target")
+    code = POSTFIX_CODE.search(target)
+    if code and not (code.group("code") or "").startswith(tuple(NOT_MODULES)):
+        return code.group("code") or code.group("paren")
+    if DOCUMENT_WORDS.search(target):
+        return CAPITALISED_RUN.match(target).group(0).strip()
+    return None
 
 
 def _numbers(nums: str) -> list[str]:
