@@ -87,3 +87,36 @@ def test_rules_are_tagged_with_defined_terms():
     chunks, _ = chunked("dfsa-rulebook-cob")
     terms = chunks["COB 3.3.1"]["defined_terms"]
     assert {"Authorised Firm", "Financial Service", "Market Counterparty"} <= set(terms)
+
+
+LAWS = {
+    "regulatory_law": ("Regulatory Law", 95),
+    "law_regulating_islamic_financial_business": ("Law Regulating Islamic Financial Business", 16),
+    "investment_trust_law": ("Investment Trust Law", 24),
+    "collective_investment_law": ("Collective Investment Law", 49),
+    "markets_law": ("Markets Law", 28),
+}
+
+
+@pytest.mark.parametrize("law", LAWS)
+def test_law_report_is_clean(law):
+    chunks, report = chunked(f"dfsa-laws-{law}")
+    name, definitions = LAWS[law]
+    assert report["article_gaps"] == [] and report["rejected_numbers"] == []
+    assert report["loose_text"] == [] and report["split"]["still_over_max"] == []
+    assert report["counts"]["definitions"] == definitions  # = rows in the PDF's tables
+    assert f"{name} Art. 1" in chunks
+    assert not any(
+        c["chunk_type"] == "article" and "\nChapter " in c["text"] for c in chunks.values()
+    )
+
+
+def test_rulebook_references_to_laws_resolve():
+    law_keys = {k for law in LAWS for k in chunked(f"dfsa-laws-{law}")[0]}
+    names = {name for name, _ in LAWS.values()}
+    for module in ("gen", "cob", "aml", "mkt", "fpr"):
+        chunks, _ = chunked(f"dfsa-rulebook-{module}")
+        for c in chunks.values():
+            for ref in c["cross_refs"]:
+                if ref.split(" Art. ")[0] in names:
+                    assert ref in law_keys, f"{c['key']} -> {ref}"

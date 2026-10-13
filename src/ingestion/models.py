@@ -21,10 +21,18 @@ class ChunkType(StrEnum):
     # One Glossary (GLO) entry. Binding: GLO 1.2.1 gives a defined term the
     # meaning set out in the Glossary.
     DEFINITION = "definition"
+    # An Article of a DIFC Law, or a numbered paragraph of a Law's Schedule.
+    ARTICLE = "article"
     SECTION = "section"  # parent: stored, never embedded
 
 
-EMBEDDED_TYPES = {ChunkType.RULE, ChunkType.GUIDANCE, ChunkType.TEXT, ChunkType.DEFINITION}
+EMBEDDED_TYPES = {
+    ChunkType.RULE,
+    ChunkType.GUIDANCE,
+    ChunkType.TEXT,
+    ChunkType.DEFINITION,
+    ChunkType.ARTICLE,
+}
 
 
 class Chunk(BaseModel):
@@ -32,7 +40,9 @@ class Chunk(BaseModel):
     key: str  # unique within a document version: "COB 3.3.2", "COB 3.3.2 Guidance", "COB 3.3"
     citation: str  # what an answer cites: "COB 3.3.2" (Guidance cites the rule it explains)
     chunk_type: ChunkType
-    binding: bool  # Rules and Glossary definitions bind; Guidance and unnumbered text don't
+    # Rules, Law articles and definitions bind; Guidance doesn't; unnumbered text
+    # binds in a Law (it is still law) but not in the Rulebook.
+    binding: bool
 
     doc_id: str
     regulator: str
@@ -41,7 +51,9 @@ class Chunk(BaseModel):
     effective_date: str
     source_file: str
 
-    rule_number: str | None = None  # "3.3.2", "A2.1.1"; None for sections and section Guidance
+    # The provision's number: a rule ("3.3.2", "A2.1.1") or a Law article ("20",
+    # "99A"). None for sections, section-level Guidance, text and definitions.
+    rule_number: str | None = None
     section: str  # "3.3", "A2.1"
     order: int  # position in the document, for reassembling sections in order
 

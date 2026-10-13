@@ -57,6 +57,13 @@ def sequence_gaps(rule_numbers: list[str]) -> list[str]:
     return gaps
 
 
+def article_gaps(numbers: list[str]) -> list[str]:
+    """Missing Article numbers: 54 -> 56 reports 55. Lettered Articles (99A) are
+    insertions, not gaps."""
+    plain = [int(n) for n in numbers if n.isdigit()]
+    return [str(n) for a, b in zip(plain, plain[1:], strict=False) for n in range(a + 1, b)]
+
+
 def report(
     chunks: list[Chunk],
     issues: ChunkIssues,
@@ -69,6 +76,10 @@ def report(
     embedded = [c for c in children if c.embedded]
     whole = [c for c in children if c.part is None]  # parts of a split chunk count once
     rules = [c for c in whole if c.chunk_type == ChunkType.RULE]
+    # A Law's Articles (not its Schedule paragraphs, whose numbering restarts).
+    articles = [
+        c for c in whole if c.chunk_type == ChunkType.ARTICLE and not c.section.startswith("Sch.")
+    ]
     # Real sections only; chapter-level containers ("3", "APP2") are not TOC entries.
     sections = {
         c.section
@@ -93,6 +104,11 @@ def report(
             "guidance": sum(c.chunk_type == ChunkType.GUIDANCE for c in whole),
             "text": sum(c.chunk_type == ChunkType.TEXT for c in whole),
             "definitions": sum(c.chunk_type == ChunkType.DEFINITION for c in whole),
+            "articles": len(articles),
+            "deleted_articles": sum(c.deleted for c in articles),
+            "schedule_paragraphs": sum(
+                c.chunk_type == ChunkType.ARTICLE and c.section.startswith("Sch.") for c in whole
+            ),
             "section_guidance": sum(
                 c.chunk_type == ChunkType.GUIDANCE and c.rule_number is None for c in whole
             ),
@@ -107,6 +123,7 @@ def report(
         "deleted_sections": issues.deleted_sections,
         "sections_not_in_toc": sorted(sections - toc, key=_sort_key) if toc else [],
         "rule_gaps": sequence_gaps([c.rule_number for c in rules]),
+        "article_gaps": article_gaps([c.rule_number for c in articles]),
         "rejected_numbers": issues.rejected_numbers,
         "implicit_sections": issues.implicit_sections,
         "loose_text": issues.loose_text,

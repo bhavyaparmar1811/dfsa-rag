@@ -44,6 +44,7 @@ def surface_forms(term: str) -> list[str]:
 
 class TermMatcher:
     def __init__(self, terms: list[str]):
+        self.terms = list(terms)
         self.canonical: dict[str, str] = {}
         for term in terms:
             for form in surface_forms(term):

@@ -23,7 +23,8 @@ from src.ingestion.ids import chunk_id
 from src.ingestion.manifest import ManifestEntry
 from src.ingestion.models import Chunk, ChunkType, embedding_text
 
-HEADER_ROW = ("Defined Term", "Definition")
+# Header rows of definitions tables: GLO, and the Laws' interpretation Schedules.
+HEADER_ROWS = {("Defined Term", "Definition"), ("Term", "Definition"), ("Terms", "Definitions")}
 # Navigation on the Glossary pages: the A-Z index, letter headings (sometimes
 # read as plain text, e.g. "I"), "Back to top", and "[no definitions]" under X and Y.
 NAVIGATION = {
@@ -107,7 +108,7 @@ def rows_to_entries(rows: list[tuple[int, list[str]]]) -> list[tuple[str, str, l
     """
     out: list[tuple[str, str, list[int]]] = []
     for page, cells in rows:
-        if tuple(cells[:2]) == HEADER_ROW or not any(cells):
+        if tuple(cells[:2]) in HEADER_ROWS or not any(cells):
             continue
         term, definition = cells[0], " ".join(collapse_row(cells[1:]))
         if not term and out:

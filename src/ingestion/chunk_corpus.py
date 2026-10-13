@@ -25,6 +25,7 @@ import tiktoken
 
 from src.config.settings import ChunkingSettings, PathSettings
 from src.ingestion.chunkers.glossary import GlossaryChunker
+from src.ingestion.chunkers.law import LawChunker, law_name
 from src.ingestion.chunkers.rulebook import RulebookChunker
 from src.ingestion.elements import to_elements
 from src.ingestion.manifest import ManifestEntry, load_manifest
@@ -40,8 +41,7 @@ GLOSSARY_MODULE = "GLO"
 
 
 def supported(entry: ManifestEntry) -> bool:
-    # Laws get their own chunker in a later step.
-    return entry.doc_type == "rulebook"
+    return entry.doc_type in ("rulebook", "law")
 
 
 def is_glossary(entry: ManifestEntry) -> bool:
@@ -67,14 +67,21 @@ def chunk_document(
         return len(encoding.encode(text))
 
     elements = to_elements(doc)
+    law = None
     if is_glossary(entry):
         result = GlossaryChunker(entry, count).chunk(doc, elements)
         matcher = TermMatcher([c.term for c in result.chunks if c.term])
+    elif entry.doc_type == "law":
+        law = law_name(entry)
+        result = LawChunker(entry, count).chunk(elements)
+        # A Law's own Schedule definitions, on top of the Glossary's terms.
+        own_terms = [c.term for c in result.chunks if c.term]
+        matcher = TermMatcher(glossary_matcher(cfg, paths, codes).terms + own_terms)
     else:
         result = RulebookChunker(entry, count).chunk(elements)
         matcher = glossary_matcher(cfg, paths, codes)
     chunks = Splitter(count, cfg.max_chunk_tokens).split_chunks(result.chunks)
-    chunks = annotate(chunks, codes)
+    chunks = annotate(chunks, codes, law)
     chunks = tag(chunks, matcher)
 
     chunks_dir = paths.parsed_dir / "chunks"
@@ -123,6 +130,23 @@ def glossary_matcher(cfg: ChunkingSettings, paths: PathSettings, codes: set[str]
     return _matchers[key]
 
 
+def print_law_summary(reports: list[dict], cfg: ChunkingSettings) -> None:
+    over = f"over_{cfg.max_chunk_tokens}"
+    cols = (
+        f"{'law':<44}{'articles':>9}{'del':>5}{'sch para':>9}{'defs':>6}{'text':>6}"
+        f"{'gaps':>6}{'reject':>7}{'loose':>6}{'med tok':>8}{'>' + over[5:]:>6}{'max':>6}"
+    )
+    print("\n" + cols + "\n" + "-" * len(cols))
+    for r in reports:
+        c, t = r["counts"], r["tokens"]
+        print(
+            f"{r['doc_id'].removeprefix('dfsa-laws-'):<44}{c['articles']:>9}"
+            f"{c['deleted_articles']:>5}{c['schedule_paragraphs']:>9}{c['definitions']:>6}"
+            f"{c['text']:>6}{len(r['article_gaps']):>6}{len(r['rejected_numbers']):>7}"
+            f"{len(r['loose_text']):>6}{t['median']:>8}{t[over]:>6}{t['max']:>6}"
+        )
+
+
 def print_summary(reports: list[dict], cfg: ChunkingSettings) -> None:
     over_rr, over_max = f"over_{cfg.rerank_warn_tokens}", f"over_{cfg.max_chunk_tokens}"
     cols = (
@@ -166,8 +190,12 @@ def main() -> int:
             logger.info("%s: no chunker yet for this document type, skipped", entry.id)
             continue
         reports.append(chunk_document(entry, cfg, paths, codes))
-    if reports:
-        print_summary(reports, cfg)
+    rulebook = [r for r in reports if not r["doc_id"].startswith("dfsa-laws-")]
+    laws = [r for r in reports if r["doc_id"].startswith("dfsa-laws-")]
+    if rulebook:
+        print_summary(rulebook, cfg)
+    if laws:
+        print_law_summary(laws, cfg)
     return 0
 
 

@@ -48,3 +48,23 @@ def test_not_references(text):
 )
 def test_document_named_after_the_reference(text, module, refs):
     assert extract_refs(text, module) == refs
+
+
+@pytest.mark.parametrize(
+    "text, refs",
+    [
+        ("appointed under Article 19(1) in the exercise", ["Regulatory Law Art. 19"]),
+        ("Articles 37 and 38 of the Markets Law", ["Markets Law Art. 37", "Markets Law Art. 38"]),
+        ("Schedule 1 contains:", ["Regulatory Law Sch. 1"]),
+        ("see GEN Rule 2.26.1", ["GEN 2.26.1"]),
+        ("as defined in Rule 2.3", []),  # Laws have no local Rules
+    ],
+)
+def test_references_inside_a_law(text, refs):
+    assert extract_refs(text, "REG_LAW", law="Regulatory Law") == refs
+
+
+def test_difc_prefix_is_dropped_from_law_names():
+    assert extract_refs("Article 76 of the DIFC Regulatory Law", "COB") == [
+        "Regulatory Law Art. 76"
+    ]

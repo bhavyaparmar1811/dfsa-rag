@@ -35,9 +35,14 @@ KIND = r"(?:Rules?|[Ss]ections?|[Cc]hapters?)"
 NUM_LIST = rf"(?P<nums>{NUM}(?:\(\w+\))*(?:\s*(?:,|and|or|to)\s*{NUM}(?:\(\w+\))*)*)"
 SINGLE_NUM = re.compile(rf"{NUM}")
 SUB_PARAGRAPH = re.compile(r"\(\w+\)")  # "(1)", "(b)": dropped, refs point at the rule
-ARTICLE = re.compile(
-    r"\bArticles?\s+(?P<num>\d+[A-Z]?)(?:\(\w+\))*\s+of\s+the\s+(?P<law>(?:[A-Z][\w-]*\s+)+Law)\b"
-)
+# Law articles: "Article 19(1)", "Articles 37 and 38".
+ART_NUM = r"\d+[A-Z]?"
+ART_LIST = rf"(?P<nums>{ART_NUM}(?:\(\w+\))*(?:\s*(?:,|and|or|to)\s*{ART_NUM}(?:\(\w+\))*)*)"
+# "Article 76 of the Regulatory Law", "Articles 37 and 38 of the Markets Law".
+ARTICLE = re.compile(rf"\bArticles?\s+{ART_LIST}\s+of\s+the\s+(?P<law>(?:[A-Z][\w-]*\s+)+Law)\b")
+# Inside a Law: "Article 19(1)", "Schedule 1", which refer to that same Law.
+LOCAL_ARTICLE = re.compile(rf"\bArticles?\s+{ART_LIST}")
+LOCAL_SCHEDULE = re.compile(r"\bSchedule\s+(?P<num>\d+)\b")
 APPENDIX = re.compile(r"\bApp(?:endix)?\s?(?P<num>\d+)\b")
 
 
@@ -70,8 +75,15 @@ DOCUMENT_WORDS = re.compile(r"\b(Law|Rules|Regulations|Sourcebook|Regime|[Mm]odu
 CAPITALISED_RUN = re.compile(r"(?:[A-Z][\w'-]*\s?)+")
 
 
-def extract_refs(text: str, module: str, codes: set[str] | None = None) -> list[str]:
-    """Normalised references found in `text`, in order of first appearance."""
+def extract_refs(
+    text: str, module: str, codes: set[str] | None = None, law: str | None = None
+) -> list[str]:
+    """Normalised references found in `text`, in order of first appearance.
+
+    `law` is the name of the Law the text belongs to ("Regulatory Law"), or
+    None for Rulebook text. In a Law, a bare "Article 19" or "Schedule 1" refers
+    to that Law, and "Rule"/"section" numbers are never local.
+    """
     codes = (codes or set()) | KNOWN_MODULES
     refs: list[str] = []
     taken: list[tuple[int, int]] = []
@@ -96,6 +108,22 @@ def extract_refs(text: str, module: str, codes: set[str] | None = None) -> list[
         for num in _numbers(m.group("nums")):
             add(f"{mod} {num}")
 
+    for m in ARTICLE.finditer(text):
+        taken.append(m.span())
+        # "the DIFC Regulatory Law" is the Regulatory Law.
+        name = m.group("law").strip().removeprefix("DIFC ")
+        for num in _numbers(m.group("nums")):
+            add(f"{name} Art. {num}")
+
+    if law is not None:
+        for m in LOCAL_ARTICLE.finditer(text):
+            if not is_taken(m.start()):
+                for num in _numbers(m.group("nums")):
+                    add(f"{law} Art. {num}")
+        for m in LOCAL_SCHEDULE.finditer(text):
+            add(f"{law} Sch. {m.group('num')}")
+        return refs
+
     for m in LOCAL_REF.finditer(text):
         if is_taken(m.start()):
             continue  # already read as "GEN Rule ..."
@@ -106,9 +134,6 @@ def extract_refs(text: str, module: str, codes: set[str] | None = None) -> list[
     for m in APPENDIX.finditer(text):
         if not is_taken(m.start()):
             add(f"{module} App{m.group('num')}")
-
-    for m in ARTICLE.finditer(text):
-        add(f"{m.group('law').strip()} Art. {m.group('num')}")
 
     return refs
 
@@ -131,14 +156,14 @@ def _numbers(nums: str) -> list[str]:
     return SINGLE_NUM.findall(SUB_PARAGRAPH.sub("", nums))
 
 
-def annotate(chunks: list[Chunk], codes: set[str]) -> list[Chunk]:
+def annotate(chunks: list[Chunk], codes: set[str], law: str | None = None) -> list[Chunk]:
     """Set `cross_refs` on every child chunk (not on section parents)."""
     out = []
     for c in chunks:
         if c.chunk_type == "section":
             out.append(c)
             continue
-        own = {c.citation, f"{c.module} {c.section}"}
-        refs = [r for r in extract_refs(c.text, c.module, codes) if r not in own]
+        own = {c.citation, c.parent_key, f"{c.module} {c.section}"}
+        refs = [r for r in extract_refs(c.text, c.module, codes, law) if r not in own]
         out.append(c.model_copy(update={"cross_refs": refs}))
     return out
