@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from functools import lru_cache
 
 import tiktoken
@@ -29,6 +30,7 @@ from src.ingestion.chunkers.law import LawChunker, law_name
 from src.ingestion.chunkers.rulebook import RulebookChunker
 from src.ingestion.elements import to_elements
 from src.ingestion.manifest import ManifestEntry, load_manifest
+from src.ingestion.models import Chunk
 from src.ingestion.parse import parse
 from src.ingestion.refs import annotate
 from src.ingestion.split import Splitter
@@ -53,12 +55,24 @@ def _encoding(name: str) -> tiktoken.Encoding:
     return tiktoken.get_encoding(name)
 
 
+@dataclass(frozen=True)
+class ChunkedDocument:
+    chunks: list[Chunk]
+    report: dict
+
+
+def rulebook_codes(entries: list[ManifestEntry]) -> set[str]:
+    """Module codes cross-references can point at ("COB", "GEN", ...)."""
+    return {e.module_code for e in entries if e.doc_type == "rulebook"}
+
+
 def chunk_document(
     entry: ManifestEntry,
     cfg: ChunkingSettings,
     paths: PathSettings,
     module_codes: set[str] | None = None,
-) -> dict:
+) -> ChunkedDocument:
+    """Chunk one document, write its JSONL and report, and return both."""
     doc = parse(entry, paths=paths)
     encoding = _encoding(cfg.tokenizer)
     codes = module_codes or {entry.module_code}
@@ -105,7 +119,7 @@ def chunk_document(
     (reports_dir / f"{entry.id}.json").write_text(
         json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    return rep
+    return ChunkedDocument(chunks, rep)
 
 
 _matchers: dict[str, TermMatcher] = {}
@@ -182,14 +196,14 @@ def main() -> int:
         logger.error("No manifest entry with id %r.", args.doc)
         return 1
 
-    codes = {e.module_code for e in load_manifest() if e.doc_type == "rulebook"}
+    codes = rulebook_codes(load_manifest())
     entries.sort(key=lambda e: not is_glossary(e))  # GLO first: the others use its terms
     reports = []
     for entry in entries:
         if not supported(entry):
             logger.info("%s: no chunker yet for this document type, skipped", entry.id)
             continue
-        reports.append(chunk_document(entry, cfg, paths, codes))
+        reports.append(chunk_document(entry, cfg, paths, codes).report)
     rulebook = [r for r in reports if not r["doc_id"].startswith("dfsa-laws-")]
     laws = [r for r in reports if r["doc_id"].startswith("dfsa-laws-")]
     if rulebook:

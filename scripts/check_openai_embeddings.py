@@ -36,6 +36,9 @@ def main() -> int:
     except ValidationError as e:
         print(f"FAIL: embedding settings missing or invalid in .env:\n{e}")
         return 1
+    if cfg.api_key is None:
+        print("FAIL: OPENAI_API_KEY is not set in .env (embeddings use the OpenAI API, not Azure).")
+        return 1
 
     print(f"Model:       {cfg.model}")
     print(f"Fingerprint: {cfg.fingerprint}")

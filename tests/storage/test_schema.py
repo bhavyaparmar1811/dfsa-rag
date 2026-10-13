@@ -1,25 +1,14 @@
 """The Alembic migrations against a temporary SQLite file."""
 
 import pytest
-from alembic import command
 from alembic.autogenerate import compare_metadata
-from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import inspect, select, text
 
-from src.config.settings import PROJECT_ROOT
-from src.storage.db import make_engine, session_scope
+from src.storage.db import SchemaOutOfDate, assert_migrated, make_engine, session_scope
 from src.storage.models import Base, ChunkRef, ChunkRow, ChunkTerm, Document
 
-
-@pytest.fixture
-def engine(tmp_path):
-    url = f"sqlite:///{(tmp_path / 'test.db').as_posix()}"
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.attributes["configure_logger"] = False
-    cfg.cmd_opts = type("Opts", (), {"x": [f"url={url}"]})()
-    command.upgrade(cfg, "head")
-    return make_engine(url)
+# `engine` (a migrated temporary database) comes from tests/conftest.py.
 
 
 def test_migration_creates_the_tables(engine):
@@ -31,6 +20,12 @@ def test_models_and_migrations_agree(engine):
     """Fails if a model changes without a new migration."""
     with engine.connect() as conn:
         assert compare_metadata(MigrationContext.configure(conn), Base.metadata) == []
+
+
+def test_assert_migrated(engine, tmp_path):
+    assert_migrated(engine)
+    with pytest.raises(SchemaOutOfDate, match="alembic upgrade head"):
+        assert_migrated(make_engine(f"sqlite:///{(tmp_path / 'empty.db').as_posix()}"))
 
 
 def test_pragmas(engine):

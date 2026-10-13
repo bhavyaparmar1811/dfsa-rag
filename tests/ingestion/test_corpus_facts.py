@@ -20,7 +20,7 @@ def cob():
     entry = next(e for e in load_manifest() if e.id == "dfsa-rulebook-cob")
     if not entry.path(PATHS.root).is_file():
         pytest.skip("COB PDF not present in data/raw")
-    report = chunk_document(entry, ChunkingSettings(), PATHS)
+    report = chunk_document(entry, ChunkingSettings(), PATHS).report
     import json
 
     path = PATHS.parsed_dir / "chunks" / f"{entry.id}.jsonl"

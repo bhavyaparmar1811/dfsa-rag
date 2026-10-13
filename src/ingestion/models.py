@@ -7,6 +7,7 @@ after retrieval. Links between chunks use `key`, the human-readable citation
 deterministic uuid derived from it, used as the Qdrant point id.
 """
 
+import hashlib
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -101,3 +102,13 @@ def embedding_text(header: str, text: str) -> str:
     all agree on it.
     """
     return f"{header}\n\n{text}"
+
+
+def content_hash(chunk: Chunk, fingerprint: str) -> str:
+    """sha256 of the embedding fingerprint + embedding_text(): what the vector depends on.
+
+    A chunk is re-embedded only when this changes, so it covers exactly what the
+    embedding model sees (and which model sees it), nothing else. Defined once
+    here: ingestion's change detection and the reconcile check must agree on it.
+    """
+    return hashlib.sha256(f"{fingerprint}\n{chunk.embedding_text()}".encode()).hexdigest()

@@ -51,8 +51,10 @@ class EmbeddingSettings(BaseSettings):
 
     model_config = _section("EMBEDDING_")
 
-    # Read from OPENAI_API_KEY, not EMBEDDING_API_KEY.
-    api_key: SecretStr = Field(validation_alias="OPENAI_API_KEY")
+    # Read from OPENAI_API_KEY, not EMBEDDING_API_KEY. Optional here so that
+    # chunking, loading SQLite and dry runs (which only need the model name and
+    # dimension) work without it; EmbeddingClient refuses to start without it.
+    api_key: SecretStr | None = Field(None, validation_alias="OPENAI_API_KEY")
     model: str = "text-embedding-3-small"
     dimensions: int = 1536
     batch_size: int = 100
@@ -79,6 +81,10 @@ class QdrantSettings(BaseSettings):
     url: str = "http://localhost:6333"
     api_key: SecretStr | None = None
     collection_prefix: str = "dfsa_rules"
+    # The one sparse (BM25) encoder, for documents and queries alike. Like the
+    # embedding fingerprint, it is recorded with the collection and with every
+    # ingestion run; changing it means re-encoding the corpus.
+    sparse_model: str = "Qdrant/bm25"
 
 
 class ChunkingSettings(BaseSettings):

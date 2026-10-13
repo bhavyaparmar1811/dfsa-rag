@@ -45,6 +45,8 @@ def assert_compatible(stored_fingerprint: str, cfg: EmbeddingSettings) -> None:
 class EmbeddingClient:
     def __init__(self, cfg: EmbeddingSettings, client: OpenAI | None = None):
         self.cfg = cfg
+        if client is None and cfg.api_key is None:
+            raise ValueError("OPENAI_API_KEY is not set: embeddings need it (see .env.example).")
         self._client = client or OpenAI(api_key=cfg.api_key.get_secret_value())
         try:
             self._encoding = tiktoken.encoding_for_model(cfg.model)

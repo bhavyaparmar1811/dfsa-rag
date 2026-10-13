@@ -24,7 +24,7 @@ def chunked(doc_id: str) -> tuple[dict, dict]:
         entry = ENTRIES[doc_id]
         if not entry.path(PATHS.root).is_file():
             pytest.skip(f"{doc_id} PDF not present in data/raw")
-        report = chunk_document(entry, ChunkingSettings(), PATHS, CODES)
+        report = chunk_document(entry, ChunkingSettings(), PATHS, CODES).report
         path = PATHS.parsed_dir / "chunks" / f"{doc_id}.jsonl"
         lines = path.read_text(encoding="utf-8").splitlines()
         _cache[doc_id] = ({c["key"]: c for c in map(json.loads, lines)}, report)
