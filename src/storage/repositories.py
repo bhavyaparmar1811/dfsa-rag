@@ -68,6 +68,29 @@ class ChunkRepository:
         )  # fmt: skip
         return {r.key: StoredChunk(r.id, r.key, r.content_hash, r.is_embedded) for r in rows}
 
+    def index_states(self) -> list:
+        """Every row's index-related columns, for reconcile."""
+        return list(
+            self.s.execute(
+                select(
+                    ChunkRow.id, ChunkRow.key, ChunkRow.document_id, ChunkRow.chunk_type,
+                    ChunkRow.deleted, ChunkRow.parts, ChunkRow.content_hash, ChunkRow.is_embedded,
+                    ChunkRow.embedding_model, ChunkRow.embedding_dimensions,
+                ).order_by(ChunkRow.document_id, ChunkRow.order_idx)
+            )
+        )  # fmt: skip
+
+    def clear_embedded(self, ids: Iterable[str]) -> None:
+        ids = list(ids)
+        if ids:
+            self.s.execute(
+                update(ChunkRow)
+                .where(ChunkRow.id.in_(ids))
+                .values(is_embedded=False, embedding_model=None, embedding_dimensions=None,
+                        embedded_at=None),
+                execution_options={"synchronize_session": False},
+            )  # fmt: skip
+
     def upsert(self, chunks: list[Chunk], hashes: dict[str, str]) -> None:
         """Write `chunks` (one document's) and replace their references and terms.
 
@@ -120,15 +143,23 @@ class ChunkRepository:
         return result.rowcount
 
     def mark_embedded(
-        self, ids: Iterable[str], model: str, dimensions: int, at: datetime | None = None
+        self,
+        ids: Iterable[str],
+        model: str,
+        dimensions: int,
+        at: datetime | None = None,
+        only_unmarked: bool = False,
     ) -> None:
+        """Record that these chunks have a current point. With `only_unmarked`, rows
+        already marked keep their original `embedded_at`."""
         ids = list(ids)
         if ids:
+            stmt = update(ChunkRow).where(ChunkRow.id.in_(ids))
+            if only_unmarked:
+                stmt = stmt.where(ChunkRow.is_embedded.is_(False))
             self.s.execute(
-                update(ChunkRow)
-                .where(ChunkRow.id.in_(ids))
-                .values(is_embedded=True, embedding_model=model, embedding_dimensions=dimensions,
-                        embedded_at=at or utcnow()),
+                stmt.values(is_embedded=True, embedding_model=model,
+                            embedding_dimensions=dimensions, embedded_at=at or utcnow()),
                 execution_options={"synchronize_session": False},
             )  # fmt: skip
 

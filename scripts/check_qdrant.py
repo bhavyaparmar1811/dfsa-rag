@@ -11,10 +11,10 @@ import sys
 
 import httpx
 from pydantic import ValidationError
-from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from src.config.settings import QdrantSettings
+from src.storage.qdrant_store import make_client
 
 
 def main() -> int:
@@ -39,7 +39,7 @@ def main() -> int:
         print(f"FAIL: cannot reach {cfg.url}: {e}. Is the container running?")
         return 1
 
-    client = QdrantClient(url=cfg.url, api_key=key, timeout=10)
+    client = make_client(cfg)
     try:
         collections = client.get_collections().collections
     except UnexpectedResponse as e:
@@ -52,7 +52,9 @@ def main() -> int:
         meta = detail.config.metadata or {}
         print(
             f"  - {c.name}: {detail.points_count} points, status {detail.status.value}, "
-            f"built with {meta.get('fingerprint', 'unknown model')}"
+            f"built with {meta.get('fingerprint', 'unknown model')} + "
+            f"{meta.get('sparse_fingerprint', 'no sparse encoder')}, "
+            f"schema v{meta.get('schema_version', '?')}"
         )
     if status != 401:
         print("WARN: the server accepts requests without an API key.")

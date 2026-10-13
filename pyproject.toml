@@ -36,6 +36,10 @@ testpaths = ["tests"]
 markers = [
     "corpus: checks against the real PDFs in data/raw (skipped when they are absent)",
 ]
+filterwarnings = [
+    # Unit tests use Qdrant's in-memory mode, which ignores payload indexes.
+    "ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
+]
 
 [dependency-groups]
 dev = [

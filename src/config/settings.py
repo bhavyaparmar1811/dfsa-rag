@@ -61,6 +61,10 @@ class EmbeddingSettings(BaseSettings):
     # Per-input token limit of the text-embedding-3 models. Inputs over this
     # raise instead of being silently truncated.
     max_input_tokens: int = 8191
+    # Retries (with exponential backoff) for rate limits, timeouts and 5xx
+    # errors; done by the OpenAI SDK itself.
+    max_retries: int = 5
+    timeout_s: float = 60.0
 
     # USD per 1M tokens, used for cost logging.
     cost_per_1m: float = 0.02
@@ -78,13 +82,37 @@ class EmbeddingSettings(BaseSettings):
 class QdrantSettings(BaseSettings):
     model_config = _section("QDRANT_")
 
-    url: str = "http://localhost:6333"
+    # 127.0.0.1, not localhost: on Windows "localhost" tries IPv6 (::1) first, and
+    # the container only listens on 127.0.0.1, so every new connection waited ~2 s.
+    url: str = "http://127.0.0.1:6333"
     api_key: SecretStr | None = None
     collection_prefix: str = "dfsa_rules"
     # The one sparse (BM25) encoder, for documents and queries alike. Like the
     # embedding fingerprint, it is recorded with the collection and with every
     # ingestion run; changing it means re-encoding the corpus.
     sparse_model: str = "Qdrant/bm25"
+    # BM25 parameters. avg_len is the corpus's mean chunk length in BM25 tokens
+    # (after stopwords and stemming): 419,845 tokens over 3,397 embedded chunks
+    # in corpus v1. fastembed's default of 256 would under-penalise long chunks.
+    # Document weights depend on all three, so they are part of the fingerprint.
+    sparse_k: float = 1.2
+    sparse_b: float = 0.75
+    sparse_avg_len: float = 124.0
+    timeout_s: int = 30
+    upsert_batch_size: int = 100
+
+    @property
+    def sparse_fingerprint(self) -> str:
+        """e.g. 'Qdrant/bm25-k1.2-b0.75-avg124': stored with the collection and every run."""
+        params = f"k{self.sparse_k:g}-b{self.sparse_b:g}-avg{self.sparse_avg_len:g}"
+        return f"{self.sparse_model}-{params}"
+
+
+def collection_name(qdrant: QdrantSettings, embedding: EmbeddingSettings) -> str:
+    """Collection name tied to the embedding model, e.g.
+    'dfsa_rules__text-embedding-3-small-1536'. Changing the embedding model
+    means a new collection and a full re-embed."""
+    return f"{qdrant.collection_prefix}__{embedding.fingerprint}"
 
 
 class ChunkingSettings(BaseSettings):
@@ -134,10 +162,7 @@ class Settings(BaseModel):
 
     @property
     def qdrant_collection(self) -> str:
-        """Collection name tied to the embedding model, e.g.
-        'dfsa_rules__text-embedding-3-small-1536'. Changing the embedding model
-        means a new collection and a full re-embed."""
-        return f"{self.qdrant.collection_prefix}__{self.embedding.fingerprint}"
+        return collection_name(self.qdrant, self.embedding)
 
 
 @lru_cache

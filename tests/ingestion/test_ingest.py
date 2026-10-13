@@ -49,7 +49,7 @@ def test_first_run_loads_everything_glossary_first(engine):
     result, order = run(engine, corpus())
     assert order == [GLO.id, COB.id]
     assert (result.stats.chunks_new, result.stats.docs_processed) == (4, 2)
-    assert result.embed_tokens == 30  # 3 embeddable chunks x 10 tokens; the section isn't
+    assert result.estimated_tokens == 30  # 3 embeddable chunks x 10 tokens; the section isn't
     assert count(engine) == 4
     with session_scope(engine) as s:
         run_row = s.get(IngestionRun, result.run_id)

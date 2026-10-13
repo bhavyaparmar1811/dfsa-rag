@@ -47,7 +47,11 @@ class EmbeddingClient:
         self.cfg = cfg
         if client is None and cfg.api_key is None:
             raise ValueError("OPENAI_API_KEY is not set: embeddings need it (see .env.example).")
-        self._client = client or OpenAI(api_key=cfg.api_key.get_secret_value())
+        self._client = client or OpenAI(
+            api_key=cfg.api_key.get_secret_value(),
+            max_retries=cfg.max_retries,
+            timeout=cfg.timeout_s,
+        )
         try:
             self._encoding = tiktoken.encoding_for_model(cfg.model)
         except KeyError:

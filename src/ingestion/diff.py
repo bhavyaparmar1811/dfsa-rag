@@ -1,7 +1,9 @@
 """What changed in a document since it was last ingested.
 
-A fresh chunking of a document is compared, chunk by chunk, with what SQLite
-holds for it, by `key` and `content_hash`:
+Two comparisons, both pure functions:
+
+`diff_chunks()`: a fresh chunking against what SQLite holds, by `key` and
+`content_hash`. This drives the SQLite writes and the run's counts.
 
     new         the key isn't stored yet
     changed     the key is stored, but its text, header, embedding model or id
@@ -9,9 +11,15 @@ holds for it, by `key` and `content_hash`:
     unchanged   same key, same id, same content_hash
     removed     stored, but no longer produced by the chunker
 
-Only the embedding depends on `content_hash`, so an unchanged chunk is never
-re-embedded; its row is still rewritten, because metadata the vector doesn't
-depend on (pages, cross-references, Defined Terms) may have changed.
+`plan_index()`: the embeddable chunks against the points actually in Qdrant.
+This decides what is embedded, so the index heals itself: a dropped collection,
+or a crash between the Qdrant write and the SQLite commit, is repaired by the
+next run without re-embedding anything that is already there.
+
+    to_embed      no point, or a point whose content_hash differs: embed + upsert
+    payload_only  the vector is current but the payload isn't (pages, references,
+                  terms changed): rewrite the payload, no embedding
+    stale_ids     points of this document that no chunk maps to any more: delete
 """
 
 from dataclasses import dataclass, field
@@ -35,12 +43,9 @@ class ChunkDiff:
     changed: list[Chunk] = field(default_factory=list)
     unchanged: list[Chunk] = field(default_factory=list)
     removed: list[StoredChunk] = field(default_factory=list)
-    # Embeddable chunks that need a vector: new, changed, or unchanged but never
-    # embedded (e.g. loaded with --no-embed).
+    # Embeddable chunks SQLite doesn't record as embedded with their current hash.
+    # Used for estimates when Qdrant isn't consulted (--no-embed).
     to_embed: list[Chunk] = field(default_factory=list)
-    # Points to delete from the index because nothing will overwrite them: removed
-    # chunks, chunks whose id changed, chunks that are no longer embeddable.
-    stale_point_ids: list[str] = field(default_factory=list)
     hashes: dict[str, str] = field(default_factory=dict)  # chunk_id -> content_hash
 
     @property
@@ -63,24 +68,59 @@ def diff_chunks(chunks: list[Chunk], stored: dict[str, StoredChunk], fingerprint
         old = stored.get(chunk.key)
         if old is None:
             diff.new.append(chunk)
-            needs_vector = True
+        elif old.id == chunk.chunk_id and old.content_hash == h:
+            diff.unchanged.append(chunk)
         else:
-            same_id = old.id == chunk.chunk_id
-            if same_id and old.content_hash == h:
-                diff.unchanged.append(chunk)
-            else:
-                diff.changed.append(chunk)
-            needs_vector = not same_id or old.content_hash != h or not old.is_embedded
-            # An upsert under the same id overwrites the old point; anything else leaves it behind.
-            if old.is_embedded and (not same_id or not chunk.embedded):
-                diff.stale_point_ids.append(old.id)
+            diff.changed.append(chunk)
 
-        if chunk.embedded and needs_vector:
+        current = old is not None and old.id == chunk.chunk_id and old.content_hash == h
+        if chunk.embedded and not (current and old.is_embedded):
             diff.to_embed.append(chunk)
 
-    for key, old in stored.items():
-        if key not in seen:
-            diff.removed.append(old)
-            if old.is_embedded:
-                diff.stale_point_ids.append(old.id)
+    diff.removed = [old for key, old in stored.items() if key not in seen]
     return diff
+
+
+@dataclass
+class IndexPlan:
+    to_embed: list[Chunk] = field(default_factory=list)
+    payload_only: list[str] = field(default_factory=list)  # point ids
+    stale_ids: list[str] = field(default_factory=list)
+    current: list[str] = field(default_factory=list)  # point ids already up to date
+
+    @property
+    def embed_tokens(self) -> int:
+        return sum(c.token_count for c in self.to_embed)
+
+    @property
+    def indexed_ids(self) -> list[str]:
+        """Every embeddable chunk's id: after the plan runs, each has a current point."""
+        return [c.chunk_id for c in self.to_embed] + self.payload_only + self.current
+
+
+def plan_index(
+    chunks: list[Chunk],
+    hashes: dict[str, str],
+    payload_hashes: dict[str, str],
+    points: dict,
+) -> IndexPlan:
+    """Plan one document's index update.
+
+    `hashes` and `payload_hashes` are {chunk_id: hash} for the new chunks;
+    `points` is {point id: PointState} for the document's points in Qdrant.
+    """
+    plan = IndexPlan()
+    wanted = set()
+    for chunk in chunks:
+        if not chunk.embedded:
+            continue
+        wanted.add(chunk.chunk_id)
+        point = points.get(chunk.chunk_id)
+        if point is None or point.content_hash != hashes[chunk.chunk_id]:
+            plan.to_embed.append(chunk)
+        elif point.payload_hash != payload_hashes[chunk.chunk_id]:
+            plan.payload_only.append(chunk.chunk_id)
+        else:
+            plan.current.append(chunk.chunk_id)
+    plan.stale_ids = sorted(pid for pid in points if pid not in wanted)
+    return plan
