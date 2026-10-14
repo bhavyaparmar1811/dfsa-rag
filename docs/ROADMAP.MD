@@ -6,7 +6,7 @@
 ## Context
 This is a compliance Q&A system over the DFSA Rulebook and the DIFC Laws. It answers in plain language with **exact rule-level citations**, and **refuses when it isn't confident**. It is portfolio project 1, so it has to show production RAG practice end to end: structure-aware ingestion, hybrid retrieval with reranking, grounded generation, observability, evaluation with a release gate, and cost tracking.
 
-The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-small`, Qdrant, SQLite, Docling, FastAPI. Langfuse (self-hosted) was added for prompt management, tracing and evals.
+The stack is fixed in CLAUDE.md: LLM GPT-4o, OpenAI `text-embedding-3-small`, Qdrant, SQLite, Docling, FastAPI. Langfuse (self-hosted) was added for prompt management, tracing and evals.
 
 **Status key:** ✅ done · 🔄 in progress · ⬜ not started · ⏸ deferred
 
@@ -384,7 +384,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 
 | Step | What | Files |
 |---|---|---|
-| ✅ F1 | Azure GPT-4o wrapper: prompt `config` mapped through an allow-list (a typo fails loudly); each call is a Langfuse generation linked to its prompt version, with usage and cost passed explicitly (Azure deployment names don't map to Langfuse's price table); API errors are raised, never turned into refusals | `src/generation/llm.py` |
+| ✅ F1 | GPT-4o wrapper: prompt `config` mapped through an allow-list (a typo fails loudly); each call is a Langfuse generation linked to its prompt version, with usage and cost passed explicitly (deployment names don't map to Langfuse's price table); API errors are raised, never turned into refusals | `src/generation/llm.py` |
 | ✅ F2 | **Confidence gate**: no context, or `confident is False`, refuses without calling the LLM; `None` (threshold not calibrated yet) runs the LLM and is recorded as gate `uncalibrated`. `AnswerResult.trace()` holds everything Phase G stores | `src/generation/answer.py` |
 | ✅ F3 | Numbered context blocks `[n] CITATION \| Label (binding/non-binding)` + heading + text; Guidance shown as `COB 3.3.2 Guidance` (a rule and its Guidance share a citation). JSON `{answer, citations:[{context_id, citation}], confident}`; answer prompt v2 | `src/generation/context.py`, `prompts/answer.yaml` |
 | ✅ F4 | **Citation validator**: at least one citation; every listed block exists and has that citation; every provision the answer names is a listed block **or a reference quoted from one**; model not confident, cut off, filtered or malformed → refusal, never a patched answer. All-Guidance answers get a fixed notice from the code | `src/generation/citations.py` |
@@ -434,7 +434,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **The answer gets the rewritten question**, with the history beside it for context; retrieval and the citation router use the rewritten one too.
 - **A turn is one message**: `CHAT_HISTORY_TURNS=6` is the last 6 messages, each cut to 1,500 characters.
 - **`GET /traces/{id}` reads SQLite**, not Langfuse (v4's legacy trace endpoint answers 404), and adds the Langfuse URL.
-- **Outage vs bug:** Azure OpenAI, OpenAI and Qdrant errors are 503 (retry); anything else is 500. Both store an error trace.
+- **Outage vs bug:** LLM, OpenAI and Qdrant errors are 503 (retry); anything else is 500. Both store an error trace.
 - **Retrieval runs one at a time** (a lock around the GPU reranker); FastAPI runs the sync endpoints in its thread pool.
 - **The reranker is pinned and loaded offline:** `bge-reranker-v2-m3` at commit `953dc6f6…` (`bge-reranker-base` at `2cfc18c9…`), from the local Hugging Face cache only (`RETRIEVAL_RERANKER_LOCAL_ONLY=true`). Startup makes no Hub request (that was the "unauthenticated requests" warning), works offline, and eval results can't shift because the model changed upstream. The revision is in every retrieval trace and in `/health`; an uncached model fails with a hint to download it once.
 - **Langfuse is optional at runtime:** `/health` reports it, but only the database, Qdrant and the reranker make the app `degraded`.
@@ -562,7 +562,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 | Step | What | Files |
 |---|---|---|
 | ✅ I0 | Phase H closed: `judge-relevance` v2 promoted through the gate (run #14), no `--skip-gate` | |
-| ✅ I1 | **Cost report over all spend.** `TraceRepository.cost_stats(since, until)`: tokens per stage, $ by provider (OpenAI embeddings vs Azure GPT-4o), refusals by reason with gate refusals apart, latency p50/p95, cache hits and savings, per day. `EvalRunRepository.cost_summary` (by kind and stage), `IngestionRunRepository.cost_summary`. `scripts/cost_report.py` prints Markdown (or `--json`) for production, evals, ingestion and a total; `/stats/cost?since=&until=` stays production-only. `percentile` moved to `src/observability/stats.py` (storage can't import eval) | `src/storage/repositories.py`, `scripts/cost_report.py`, `src/api/app.py` |
+| ✅ I1 | **Cost report over all spend.** `TraceRepository.cost_stats(since, until)`: tokens per stage, $ by provider (OpenAI embeddings vs GPT-4o), refusals by reason with gate refusals apart, latency p50/p95, cache hits and savings, per day. `EvalRunRepository.cost_summary` (by kind and stage), `IngestionRunRepository.cost_summary`. `scripts/cost_report.py` prints Markdown (or `--json`) for production, evals, ingestion and a total; `/stats/cost?since=&until=` stays production-only. `percentile` moved to `src/observability/stats.py` (storage can't import eval) | `src/storage/repositories.py`, `scripts/cost_report.py`, `src/api/app.py` |
 | ✅ I2 | **Answer cache.** Alembic 0004: `cache_entries` and `traces.cache_status / cache_entry_id / cache_similarity / cache`. `CacheSettings` (`CACHE_`), the Qdrant cache collection (`dfsa_cache__<fingerprint>`, checked against the embedding model like the chunk collection), `CacheRepository`, `SemanticCache` (namespace, exact + semantic lookup, guards, verification, store, purge), wired into `ChatService` after the rewrite; on a miss the lookup's embedding is handed to retrieval, so a question is embedded once. API: `cached` and `cache` (kind, similarity, entry, source trace); `/health` reports it. `scripts/cache.py stats | purge | clear` | `src/chat/cache.py`, `src/storage/cache_index.py`, `src/storage/migrations/versions/0004_semantic_cache.py`, `src/chat/service.py`, `scripts/cache.py` |
 | ✅ I3 | **Cache calibration.** `data/eval/cache_pairs.yaml`: 32 paraphrases and 32 hard negatives drafted from the golden set (`reviewed: false`). `src/eval/cache_eval.py`: embeds the pairs, applies the guards with the cache's own function, sweeps thresholds with and without guards, recommends one, stores `eval_runs` kind `cache`. The gate checks cache runs against a `cache` block in `eval/thresholds.yaml` (0 false hits) and that the run evaluated the configured threshold. **Decision: exact repeats only** | `src/eval/cache_eval.py`, `src/eval/gate.py`, `eval/thresholds.yaml` |
 | ✅ I4 | Live checkpoint through the API (below) | |
@@ -570,7 +570,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 
 **Cache design:**
 - **Key:** the standalone (rewritten) question, normalised (case, spacing, closing punctuation), hashed.
-- **Namespace:** sha256 of the corpus hash (every embedded chunk's content hash, recomputed when a new ingestion run finishes), the embedding and BM25 fingerprints, `Retriever.config()` (with the reranker revision and the refusal threshold), the answer prompt's content hash, the Azure deployment and the filters. The components are stored with each entry.
+- **Namespace:** sha256 of the corpus hash (every embedded chunk's content hash, recomputed when a new ingestion run finishes), the embedding and BM25 fingerprints, `Retriever.config()` (with the reranker revision and the refusal threshold), the answer prompt's content hash, the LLM deployment and the filters. The components are stored with each entry.
 - **Semantic layer (off):** nearest cached questions in Qdrant, then guards (the same provisions via `CitationRouter.find`, Defined Terms via `ContextAssembler.question_terms`, numbers), then verification.
 - **Verification on every hit:** each cited chunk still has the content hash it was answered from; SQLite decides expiry, whatever the Qdrant payload says.
 - **Stored only:** answered, gate `passed`, production label, first turn. Storing is best effort.
@@ -605,7 +605,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 
 - `scripts.cache purge` with the production config then deleted the one entry from the `top_n=7` namespace.
 - `/stats/cost` cache: 2 hits of 6 lookups, $0.037 saved.
-- `cost_report` (all time): production $0.16, evals $3.54, ingestion $0.012; OpenAI $0.012, Azure $3.70.
+- `cost_report` (all time): production $0.16, evals $3.54, ingestion $0.012; OpenAI $0.012, LLM $3.70.
 - On a miss, the cache step takes 0.4–1.1 s: it is the query embedding, moved out of retrieval (whose `embed` time is now 0), not an added cost.
 - `pytest`: 414 offline + 38 corpus (the new one checks the live cache collection against the embedding model). `ruff check` is green.
 

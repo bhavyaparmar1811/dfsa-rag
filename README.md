@@ -196,7 +196,7 @@ flowchart LR
 
 | Layer | Choice |
 |---|---|
-| Generation | Azure OpenAI **GPT-4o** (JSON mode) |
+| Generation | LLM **GPT-4o** (JSON mode) |
 | Embeddings | OpenAI **text-embedding-3-small** (1,536 dimensions) |
 | Sparse retrieval | BM25 via fastembed (`Qdrant/bm25`) |
 | Reranker | **BAAI/bge-reranker-v2-m3** (sentence-transformers `CrossEncoder`, CUDA fp16) |
@@ -226,13 +226,13 @@ flowchart LR
 **Prerequisites:**
 - Python 3.12 and [uv](https://docs.astral.sh/uv/)
 - Docker
-- An Azure OpenAI GPT-4o deployment and an OpenAI API key
+- An LLM GPT-4o deployment and an OpenAI API key
 - An NVIDIA GPU for the reranker (optional: it runs on CPU, much slower)
 
 ```bash
 # 1. Dependencies and configuration
 uv sync
-cp .env.example .env            # Azure OpenAI, OpenAI, Qdrant and API keys
+cp .env.example .env            # LLM, OpenAI, Qdrant and API keys
 uv run python -m scripts.init_langfuse_env --email you@example.com   # Langfuse secrets (once)
 
 # 2. Qdrant + Langfuse (UI at http://127.0.0.1:3000)

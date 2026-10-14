@@ -14,7 +14,7 @@ How the DFSA compliance assistant is put together: the components, one request e
 | **OpenAI** `text-embedding-3-small` (1536) | Embeddings | Documents and queries, through one client (`src/embeddings/client.py`) |
 | **fastembed** `Qdrant/bm25` | Sparse vectors | Local; `avg_len` 124, measured on the corpus |
 | **Cross-encoder** `BAAI/bge-reranker-v2-m3` | Reranking + confidence | Local, GPU fp16, pinned to a Hugging Face commit, loaded offline |
-| **Azure OpenAI** GPT-4o | Query rewriting, answers, eval judges | Temperature 0; answers and judges in JSON mode |
+| **LLM** GPT-4o | Query rewriting, answers, eval judges | Temperature 0; answers and judges in JSON mode |
 | **Langfuse v4** (self-hosted) | Tracing, prompt store, eval datasets | Prompt versions and labels; one trace per turn; dataset `dfsa-golden` |
 | **FastAPI** | Serving | `src/api/app.py`; `X-API-Key` on everything but `/health` |
 
@@ -32,7 +32,7 @@ sequenceDiagram
     actor U as Client
     participant API as FastAPI
     participant DB as SQLite
-    participant LLM as Azure GPT-4o
+    participant LLM as GPT-4o
     participant C as Answer cache
     participant E as OpenAI embeddings
     participant Q as Qdrant
@@ -95,7 +95,7 @@ sequenceDiagram
   - the corpus (every embedded chunk's content hash, recomputed when a new ingestion run finishes);
   - the embedding and BM25 fingerprints;
   - the retrieval config (incl. the reranker revision and the refusal threshold);
-  - the answer prompt's content hash and the Azure deployment;
+  - the answer prompt's content hash and the LLM deployment;
   - the request filters.
 
   A lookup only searches its own namespace, so a re-ingest, a prompt promotion or a config change makes old entries unreachable at once. `scripts/cache.py purge` deletes them.
@@ -179,7 +179,7 @@ prompts/*.yaml (git) ─sync_prompts─► Langfuse version, label "staging"
 |---|---|---|
 | Retrieval isn't confident (top rerank < 0.40) | Refusal, no LLM call | A wrong answer is worse than none |
 | The model cites something it wasn't given, or isn't confident | Refusal (citation validator) | Never a patched answer |
-| Azure OpenAI, OpenAI or Qdrant down | HTTP 503 with the trace id; an error trace is stored | An outage is not "no confident answer" |
+| LLM, OpenAI or Qdrant down | HTTP 503 with the trace id; an error trace is stored | An outage is not "no confident answer" |
 | Any other exception | HTTP 500 with the trace id | |
 | Langfuse down | Answers still work; prompts fall back to git; tracing is lost | `/health` reports it but stays `ok` |
 | Embedding model changed in config | Startup fails (`EmbeddingModelMismatch`), for both collections | Vectors from two models never mix |

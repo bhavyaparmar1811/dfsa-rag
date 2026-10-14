@@ -10,8 +10,8 @@ Portfolio positioning: this is project 1 of a multi-project portfolio (productio
 
 ## Tech stack (decided, do not swap without discussion)
 
-- **LLM (generation)**: Azure OpenAI GPT-4o (existing deployment)
-- **Embeddings**: OpenAI API (not Azure), `text-embedding-3-small`
+- **LLM (generation)**: GPT-4o (existing deployment)
+- **Embeddings**: OpenAI API, `text-embedding-3-small`
 - **Vector store**: Qdrant (hybrid dense + sparse search, payload filtering)
 - **Relational store**: SQLite (single file DB, see "SQLite" section below)
 - **Parsing**: Docling (layout-aware PDF to structured Markdown)
@@ -135,7 +135,7 @@ Every request logs: original and rewritten query, retrieved chunks with scores, 
 
 ## Cost tracking
 
-Log token usage and $ cost per request, split by embeddings (OpenAI) and generation (Azure OpenAI GPT-4o). Track the answer cache's hit rate. `scripts/cost_report.py` (all spend: production, evals, ingestion) and `GET /stats/cost` (production only, `?since=&until=`) show total cost, cost per query, refusals and cache hit rate over time.
+Log token usage and $ cost per request, split by embeddings (OpenAI) and generation (LLM GPT-4o). Track the answer cache's hit rate. `scripts/cost_report.py` (all spend: production, evals, ingestion) and `GET /stats/cost` (production only, `?since=&until=`) show total cost, cost per query, refusals and cache hit rate over time.
 
 ## Repo structure
 
@@ -175,4 +175,4 @@ CLAUDE.md
 - No embedding queries with a different model or dimension than the document chunks.
 - No citing chat history as a source.
 - No serving a cached answer outside its namespace, and no semantic cache threshold that hasn't passed the cache eval.
-- No swapping core stack choices (Qdrant, SQLite, Docling, OpenAI embeddings, Azure OpenAI GPT-4o, Langfuse) without flagging it first.
+- No swapping core stack choices (Qdrant, SQLite, Docling, OpenAI embeddings, LLM GPT-4o, Langfuse) without flagging it first.

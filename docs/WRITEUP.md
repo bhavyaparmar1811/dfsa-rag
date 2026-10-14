@@ -16,7 +16,7 @@ A chatbot that answers fluently is easy to build. One that is safe to rely on ha
 
 Those requirements shaped every decision. Retrieval precision isn't a nice-to-have here: it's the product.
 
-**The stack:** Azure OpenAI GPT-4o for generation, OpenAI `text-embedding-3-small` for embeddings, Qdrant for hybrid search, SQLite as the system of record, Docling for PDF parsing, FastAPI, and a self-hosted Langfuse for tracing and prompt versions.
+**The stack:** LLM GPT-4o for generation, OpenAI `text-embedding-3-small` for embeddings, Qdrant for hybrid search, SQLite as the system of record, Docling for PDF parsing, FastAPI, and a self-hosted Langfuse for tracing and prompt versions.
 
 ---
 
