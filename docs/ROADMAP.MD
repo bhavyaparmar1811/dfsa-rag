@@ -517,7 +517,9 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **The gate reads SQLite only;** Langfuse linking is best effort.
 - **MiniLM is pinned** at `233902d2…` (from the local cache), so all three rerankers are reproducible.
 
-**Preview on the draft set** (58 unreviewed items, 63 turns; runs #2–#9; the numbers will change after the review):
+**On the reviewed set** (runs #15–#21, 2026-10-14), the comparison is in the README's Results section. Production (hybrid + v2-m3): r@1 0.796, r@6 0.944, MRR 0.877, nDCG@6 0.841, context recall 0.982. The ordering of the configs is the same as in the draft preview below.
+
+**Preview on the draft set** (58 unreviewed items, 63 turns; runs #2–#9; kept for the record):
 
 | Config | r@1 | r@3 | r@6 | r@40 | MRR | nDCG@6 | ctx recall | retrieve p50 / p95 |
 |---|---|---|---|---|---|---|---|---|
