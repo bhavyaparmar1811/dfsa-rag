@@ -2,9 +2,16 @@
 
     POST /conversations                  start a conversation
     POST /conversations/{id}/messages    one turn: answer or refusal, with citations
+    GET  /conversations[?limit=]         recent conversations that have messages
     GET  /conversations/{id}             the conversation, every turn with its trace id
+    GET  /chunks/{id}                    a cited chunk's text, heading path and document
     GET  /traces/{id}                    the stored audit record of one turn
     GET  /stats/cost[?since=&until=]     requests, refusals, tokens, $ by stage and provider
+    GET  /eval/runs[?kind=]              eval runs, newest first, headline metrics
+    GET  /eval/runs/{id}                 one run: metrics, gate report, config, prompts
+    GET  /eval/runs/{id}/results         its per-turn results
+    GET  /eval/compare[?kind=]           the newest run of each config on one golden set
+    GET  /eval/thresholds                eval/thresholds.yaml (the release gate)
     GET  /health                         database, Qdrant, reranker, cache, Langfuse (no key)
 
 Every endpoint but /health needs `X-API-Key: <API_KEY>`. At startup: the database
@@ -23,13 +30,14 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import (
     CacheInfo,
+    ChunkOut,
     Citation,
     ConversationDetail,
     ConversationOut,
@@ -41,9 +49,10 @@ from src.api.schemas import (
 )
 from src.chat.service import ChatService, ConversationNotFound, TurnFailed, trace_url
 from src.config.settings import ApiSettings
+from src.eval.reports import EvalReports, RunNotFound
 from src.prompts.registry import report_drift
 from src.storage.db import assert_migrated
-from src.storage.models import Message
+from src.storage.models import ChunkRow, Message
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +61,13 @@ def get_service(request: Request) -> ChatService:
     return request.app.state.service
 
 
+def get_reports(request: Request) -> EvalReports:
+    return EvalReports(request.app.state.service.engine)
+
+
 Service = Annotated[ChatService, Depends(get_service)]
+Reports = Annotated[EvalReports, Depends(get_reports)]
+EvalKind = Literal["retrieval", "e2e", "cache"]
 
 
 def create_app(
@@ -86,6 +101,10 @@ def create_app(
     @app.exception_handler(ConversationNotFound)
     def _not_found(_: Request, e: ConversationNotFound) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": f"no conversation {e.args[0]}"})
+
+    @app.exception_handler(RunNotFound)
+    def _no_run(_: Request, e: RunNotFound) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": f"no eval run {e.args[0]}"})
 
     @app.exception_handler(TurnFailed)
     def _failed(_: Request, e: TurnFailed) -> JSONResponse:
@@ -137,6 +156,15 @@ def create_app(
             cache=_cache_info(turn.cache.hit) if turn.cached else None,
         )
 
+    @app.get("/conversations", dependencies=keyed)
+    def list_conversations(
+        svc: Service, limit: Annotated[int, Query(ge=1, le=200)] = 30
+    ) -> list[ConversationOut]:
+        return [
+            ConversationOut.model_validate(c, from_attributes=True)
+            for c in svc.list_conversations(limit)
+        ]
+
     @app.get("/conversations/{conversation_id}", dependencies=keyed)
     def get_conversation(conversation_id: str, svc: Service) -> ConversationDetail:
         conv, messages = svc.get_conversation(conversation_id)
@@ -144,6 +172,13 @@ def create_app(
             **ConversationOut.model_validate(conv, from_attributes=True).model_dump(),
             messages=[_message(m) for m in messages],
         )
+
+    @app.get("/chunks/{chunk_id}", dependencies=keyed)
+    def get_chunk(chunk_id: str, svc: Service) -> ChunkOut:
+        found = svc.get_chunk(chunk_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail=f"no chunk {chunk_id}")
+        return _chunk(*found)
 
     @app.get("/traces/{trace_id}", dependencies=keyed)
     def get_trace(trace_id: str, svc: Service) -> dict:
@@ -160,6 +195,26 @@ def create_app(
             raise HTTPException(status_code=422, detail="since is after until")
         return svc.cost_stats(since, until)
 
+    @app.get("/eval/runs", dependencies=keyed)
+    def eval_runs(reports: Reports, kind: EvalKind | None = None) -> list[dict]:
+        return reports.runs(kind)
+
+    @app.get("/eval/runs/{run_id}", dependencies=keyed)
+    def eval_run(run_id: int, reports: Reports) -> dict:
+        return reports.run(run_id)
+
+    @app.get("/eval/runs/{run_id}/results", dependencies=keyed)
+    def eval_results(run_id: int, reports: Reports) -> list[dict]:
+        return reports.results(run_id)
+
+    @app.get("/eval/compare", dependencies=keyed)
+    def eval_compare(reports: Reports, kind: EvalKind = "retrieval") -> dict:
+        return reports.compare(kind)
+
+    @app.get("/eval/thresholds", dependencies=keyed)
+    def eval_thresholds(reports: Reports) -> dict:
+        return reports.thresholds()
+
     return app
 
 
@@ -169,6 +224,30 @@ def _cache_info(hit) -> CacheInfo:
         similarity=None if hit.similarity is None else round(hit.similarity, 4),
         entry_id=hit.entry_id,
         source_trace_id=hit.source_trace_id,
+    )
+
+
+def _chunk(chunk: ChunkRow, whole: ChunkRow | None) -> ChunkOut:
+    doc = chunk.document
+    return ChunkOut(
+        id=chunk.id,
+        key=chunk.key,
+        citation=chunk.citation,
+        chunk_type=chunk.chunk_type,
+        binding=chunk.binding,
+        heading_path=chunk.heading_path,
+        text=chunk.text,
+        page_start=chunk.page_start,
+        page_end=chunk.page_end,
+        part=chunk.part,
+        part_of=chunk.part_of,
+        whole_text=whole.text if whole else None,
+        regulator=doc.regulator,
+        module_code=doc.module_code,
+        module_name=doc.module_name,
+        doc_type=doc.doc_type,
+        version=doc.version,
+        effective_date=doc.effective_date,
     )
 
 

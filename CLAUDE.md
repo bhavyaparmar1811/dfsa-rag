@@ -161,6 +161,7 @@ src/
   observability/           # Langfuse client, shared stats helpers
   eval/                    # golden set, metrics, judges, runner, calibration, gates
   api/                     # FastAPI
+web/                       # React UI (Vite): chat + citation inspector, eval reports, cost
 scripts/                   # CLIs: ask, retrieve, cost_report, cache, sync/promote prompts, checks
 docs/                      # ROADMAP.MD, architecture.md, WRITEUP.md, langfuse-setup.md
 CLAUDE.md

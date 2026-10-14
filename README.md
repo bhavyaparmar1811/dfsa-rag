@@ -204,8 +204,9 @@ flowchart LR
 | Relational store | **SQLite** (WAL) + SQLAlchemy + Alembic |
 | PDF parsing | **Docling** |
 | Serving | **FastAPI** |
+| Web UI | **React** 18 + Vite + TypeScript, Tailwind CSS, Recharts, Motion |
 | Tracing, prompts, datasets | **Langfuse** v4, self-hosted |
-| Tooling | Python 3.12, uv, pytest (452 tests), Ruff, Docker Compose |
+| Tooling | Python 3.12, uv, pytest (456 tests), Vitest, Ruff, Docker Compose |
 
 ## Corpus
 
@@ -279,6 +280,10 @@ uv run uvicorn src.api.app:app --host 127.0.0.1 --port 8000
 | `GET /conversations/{id}` | The conversation with its stored messages |
 | `GET /traces/{trace_id}` | The audit record: candidates with scores, prompts used, tokens, cost |
 | `GET /stats/cost` | Cost by stage and provider, tokens, refusals by reason, latency, cache hit rate; per day; `?since=&until=` |
+| `GET /conversations` | Recent conversations that have messages (`?limit=`) |
+| `GET /chunks/{chunk_id}` | A cited provision's full text, heading path, binding status and source document |
+| `GET /eval/runs`, `/eval/runs/{id}`, `/eval/runs/{id}/results` | Stored eval runs: metrics, gate report, prompts, per-question results (`?kind=retrieval\|e2e\|cache`) |
+| `GET /eval/compare`, `/eval/thresholds` | The newest run of each retrieval config on the current golden set; the release-gate limits |
 
 Every endpoint except `/health` needs an `X-API-Key` header. The server loads conversation history from SQLite and never trusts history sent by the client.
 
@@ -287,6 +292,19 @@ curl -s -X POST http://127.0.0.1:8000/conversations -H "X-API-Key: $API_KEY"
 curl -s -X POST http://127.0.0.1:8000/conversations/<id>/messages -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" -d '{"content": "When must we carry out CDD on a new customer?"}'
 ```
+
+### Run the web UI
+
+A React front end over the API (`web/`): ask questions and open each cited provision's text, inspect the retrieval behind any answer (candidates, dense/BM25 ranks, reranker scores against the refusal threshold), browse every eval run with its release gate, and see cost and cache hit rate. Light and dark themes.
+
+```bash
+cd web
+npm install
+npm run dev          # http://localhost:5173, with the API running on port 8000
+npm test             # unit tests (Vitest)
+```
+
+The dev server proxies `/api/*` to FastAPI and adds the `X-API-Key` header itself, reading `API_KEY` from the project's `.env` (or `web/.env.local`), so the key never reaches the browser.
 
 ---
 
@@ -340,8 +358,9 @@ src/
   prompts/       prompt files, Langfuse sync, the registry with git fallback
   eval/          golden set, metrics, judges, runner, calibration, gate, dataset
   api/           FastAPI app and schemas
+web/                        React UI: chat with citation inspector, eval reports, cost (Vite, TypeScript)
 scripts/                    command-line tools (ask, retrieve, cost_report, cache, inspect_store, sync/promote prompts, ...)
-tests/                      452 tests: offline fakes, plus `-m corpus` tests against the live index
+tests/                      456 tests: offline fakes, plus `-m corpus` tests against the live index
 docs/                       architecture.md, WRITEUP.md (case study), ROADMAP.MD (build log), langfuse-setup.md
 ```
 

@@ -38,6 +38,11 @@ env/
 htmlcov/
 .ipynb_checkpoints/
 
+# --- Web UI (web/) ---
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+
 # --- Logs ---
 logs/
 *.log

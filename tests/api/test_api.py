@@ -4,7 +4,12 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.config.settings import ApiSettings
+from src.eval.golden import load_golden
+from src.storage.db import session_scope
+from src.storage.models import EvalResult, EvalRun
+from src.storage.repositories import ChunkRepository, DocumentRepository, EvalRunRepository
 from tests.chat.conftest import ANSWER, FakeRetriever, make_service  # noqa: F401
+from tests.factories import chunk, entry
 
 KEY = {"X-API-Key": "test-key"}
 
@@ -118,3 +123,96 @@ def test_health_reports_each_dependency(client_for):
         assert set(body["checks"]) == {"database", "qdrant", "reranker", "cache", "langfuse"}
         assert body["checks"]["langfuse"] == {"ok": True, "enabled": False}
         assert body["checks"]["cache"] == {"ok": True, "enabled": False}  # no cache built
+
+
+# --- read-only views for the web UI --------------------------------------------
+
+
+def test_the_new_read_endpoints_need_the_key(client_for):
+    with client_for() as client:
+        for path in ("/conversations", "/chunks/x", "/eval/runs", "/eval/runs/1",
+                     "/eval/runs/1/results", "/eval/compare", "/eval/thresholds"):  # fmt: skip
+            assert client.get(path).status_code == 401, path
+
+
+def test_conversations_list_only_those_with_messages(client_for):
+    with client_for(ANSWER) as client:
+        client.post("/conversations", headers=KEY)  # never used: not listed
+        cid = client.post("/conversations", headers=KEY).json()["id"]
+        client.post(f"/conversations/{cid}/messages", headers=KEY,
+                    json={"content": "Do we need a Client Agreement?"})  # fmt: skip
+
+        listed = client.get("/conversations", headers=KEY).json()
+        assert [c["id"] for c in listed] == [cid]
+        assert listed[0]["title"] == "Do we need a Client Agreement?"
+        assert client.get("/conversations?limit=0", headers=KEY).status_code == 422
+
+
+def test_a_chunk_part_comes_with_its_whole_rule(client_for, engine):
+    cob = [
+        chunk("COB 3.3.2", text="The whole rule.", parts=["COB 3.3.2#p1"]),
+        chunk("COB 3.3.2#p1", text="Part one.", part_of="COB 3.3.2", part=1, order=1),
+    ]
+    with session_scope(engine) as s:
+        DocumentRepository(s).upsert(entry())
+        ChunkRepository(s).upsert(cob, {c.chunk_id: "h" for c in cob})
+
+    with client_for() as client:
+        body = client.get(f"/chunks/{cob[1].chunk_id}", headers=KEY).json()
+        assert body["citation"] == "COB 3.3.2" and body["part"] == 1
+        assert body["text"] == "Part one." and body["whole_text"] == "The whole rule."
+        assert body["module_code"] == "COB" and body["binding"] is True
+
+        whole = client.get(f"/chunks/{cob[0].chunk_id}", headers=KEY).json()
+        assert whole["whole_text"] is None
+        assert client.get("/chunks/nope", headers=KEY).status_code == 404
+
+
+def _eval_run(engine, **kw) -> int:
+    fields = {
+        "kind": "retrieval", "status": "ok", "config_name": "hybrid_rerank",
+        "golden_hash": load_golden().hash, "reviewed_only": True, "n_items": 1, "n_turns": 1,
+        "metrics": {"recall@6": 0.9, "mrr": 0.8}, "cost_usd": {"total": 0.5},
+    }  # fmt: skip
+    with session_scope(engine) as s:
+        repo = EvalRunRepository(s)
+        run = repo.start(EvalRun(**(fields | kw)))
+        repo.add_result(EvalResult(
+            run_id=run.id, item_id="cob-suitability-before-recommending", turn=0,
+            question="q", expect="answer", metrics={"recall@6": 1.0},
+        ))  # fmt: skip
+        return run.id
+
+
+def test_eval_runs_their_results_and_the_stage_comparison(client_for, engine):
+    old = _eval_run(engine, config_name="dense")
+    dense = _eval_run(engine, config_name="dense", metrics={"recall@6": 0.7})
+    rerank = _eval_run(engine)
+    unreviewed = _eval_run(engine, config_name="hybrid", reviewed_only=False)  # not compared
+    e2e = _eval_run(engine, kind="e2e", gate_status="passed", gate_report={"passed": True})
+
+    with client_for() as client:
+        runs = client.get("/eval/runs", headers=KEY).json()
+        assert [r["id"] for r in runs] == [e2e, unreviewed, rerank, dense, old]
+        assert runs[2]["headline"] == {"recall@6": 0.9, "mrr": 0.8}
+        assert runs[2]["cost_total_usd"] == 0.5
+        e2e_only = client.get("/eval/runs?kind=e2e", headers=KEY).json()
+        assert [r["id"] for r in e2e_only] == [e2e]
+        assert client.get("/eval/runs?kind=nope", headers=KEY).status_code == 422
+
+        run = client.get(f"/eval/runs/{e2e}", headers=KEY).json()
+        assert run["gate_status"] == "passed" and run["gate_report"] == {"passed": True}
+
+        results = client.get(f"/eval/runs/{rerank}/results", headers=KEY).json()
+        assert results[0]["item_kind"] == "single" and results[0]["gold"] == ["COB 3.4.2"]
+
+        compare = client.get("/eval/compare", headers=KEY).json()
+        assert compare["golden_is_current"] is True
+        assert [(r["id"], r["config_name"]) for r in compare["runs"]] == [
+            (dense, "dense"), (rerank, "hybrid_rerank")
+        ]  # fmt: skip
+        assert compare["runs"][0]["metrics"] == {"recall@6": 0.7}
+
+        assert client.get("/eval/runs/999", headers=KEY).status_code == 404
+        assert client.get("/eval/runs/999/results", headers=KEY).status_code == 404
+        assert client.get("/eval/thresholds", headers=KEY).json()["config"] == "hybrid_rerank"

@@ -47,8 +47,13 @@ from src.prompts.registry import PromptRegistry
 from src.retrieval.models import Filters, RetrievalResult
 from src.retrieval.pipeline import Retriever
 from src.storage.db import assert_migrated, get_engine, session_scope
-from src.storage.models import Conversation, Message, Trace
-from src.storage.repositories import ConversationRepository, MessageRepository, TraceRepository
+from src.storage.models import ChunkRow, Conversation, Message, Trace
+from src.storage.repositories import (
+    ChunkRepository,
+    ConversationRepository,
+    MessageRepository,
+    TraceRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +146,19 @@ class ChatService:
             if conv is None:
                 raise ConversationNotFound(conversation_id)
             return conv, repo.messages(conversation_id)
+
+    def list_conversations(self, limit: int = 30) -> list[Conversation]:
+        with session_scope(self.engine) as s:
+            return ConversationRepository(s).recent(limit)
+
+    def get_chunk(self, chunk_id: str) -> tuple[ChunkRow, ChunkRow | None] | None:
+        """A chunk with its document, and the whole rule when it is one part of one."""
+        with session_scope(self.engine) as s:
+            repo = ChunkRepository(s)
+            chunk = repo.get(chunk_id)
+            if chunk is None:
+                return None
+            return chunk, repo.by_key(chunk.part_of) if chunk.part_of else None
 
     def get_trace(self, trace_id: str) -> Trace | None:
         with session_scope(self.engine) as s:

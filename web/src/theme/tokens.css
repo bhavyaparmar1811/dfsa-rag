@@ -1,0 +1,306 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/newsreader";
+
+/* Theme: warm monochrome + spot pastels (taste-skill minimalist), light and dark.
+   Every colour is a role token; components never use raw hex. The dark values are
+   declared twice: under the OS media query (unless the toggle says light) and
+   under the toggle itself. */
+
+:root {
+  color-scheme: light;
+  --canvas: #fbfbfa;
+  --surface: #ffffff;
+  --surface-2: #f7f6f3;
+  --surface-3: #efeeea;
+  --line: #eaeaea;
+  --line-strong: #dcdbd7;
+  --ink: #2f3437;
+  --ink-2: #57595b;
+  --ink-3: #787774;
+  --ink-4: #a5a4a0;
+  --accent: #111111;
+  --accent-hover: #333333;
+  --accent-ink: #ffffff;
+  --focus: #1f6c9f;
+
+  --green-bg: #edf3ec;
+  --green-fg: #346538;
+  --yellow-bg: #fbf3db;
+  --yellow-fg: #956400;
+  --red-bg: #fdebec;
+  --red-fg: #9f2f2d;
+  --blue-bg: #e1f3fe;
+  --blue-fg: #1f6c9f;
+  --gray-bg: #f1f1ef;
+  --gray-fg: #57595b;
+
+  /* charts: validated categorical slots (dataviz validator, surface #ffffff) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-muted: #c9c8c3;
+  --grid: #efeeea;
+  --good: #2f8a3a;
+  --critical: #d03b3b;
+
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-float: 0 8px 28px rgba(17, 17, 17, 0.06), 0 1px 2px rgba(17, 17, 17, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --canvas: #191918;
+    --surface: #202020;
+    --surface-2: #262625;
+    --surface-3: #2e2e2c;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --ink: #e6e4df;
+    --ink-2: #c3c2bc;
+    --ink-3: #9b9a97;
+    --ink-4: #6f6e6b;
+    --accent: #ededed;
+    --accent-hover: #d6d6d4;
+    --accent-ink: #151515;
+    --focus: #8cc3ea;
+
+    --green-bg: #1e2b20;
+    --green-fg: #8dc191;
+    --yellow-bg: #33291a;
+    --yellow-fg: #e3b866;
+    --red-bg: #3a2222;
+    --red-fg: #f0a19d;
+    --blue-bg: #1b2a36;
+    --blue-fg: #8cc3ea;
+    --gray-bg: #2a2a28;
+    --gray-fg: #c3c2bc;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-muted: #4a4a47;
+    --grid: #2b2b29;
+    --good: #5fb96a;
+    --critical: #e66767;
+
+    --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.25);
+    --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #191918;
+  --surface: #202020;
+  --surface-2: #262625;
+  --surface-3: #2e2e2c;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --ink: #e6e4df;
+  --ink-2: #c3c2bc;
+  --ink-3: #9b9a97;
+  --ink-4: #6f6e6b;
+  --accent: #ededed;
+  --accent-hover: #d6d6d4;
+  --accent-ink: #151515;
+  --focus: #8cc3ea;
+
+  --green-bg: #1e2b20;
+  --green-fg: #8dc191;
+  --yellow-bg: #33291a;
+  --yellow-fg: #e3b866;
+  --red-bg: #3a2222;
+  --red-fg: #f0a19d;
+  --blue-bg: #1b2a36;
+  --blue-fg: #8cc3ea;
+  --gray-bg: #2a2a28;
+  --gray-fg: #c3c2bc;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-muted: #4a4a47;
+  --grid: #2b2b29;
+  --good: #5fb96a;
+  --critical: #e66767;
+
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", "Helvetica Neue", system-ui, sans-serif;
+  --font-serif: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
+  --font-mono: "Geist Mono Variable", "SF Mono", ui-monospace, monospace;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-green-bg: var(--green-bg);
+  --color-green-fg: var(--green-fg);
+  --color-yellow-bg: var(--yellow-bg);
+  --color-yellow-fg: var(--yellow-fg);
+  --color-red-bg: var(--red-bg);
+  --color-red-fg: var(--red-fg);
+  --color-blue-bg: var(--blue-bg);
+  --color-blue-fg: var(--blue-fg);
+  --color-gray-bg: var(--gray-bg);
+  --color-gray-fg: var(--gray-fg);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-good: var(--good);
+  --color-critical: var(--critical);
+
+  --shadow-hover: var(--shadow-hover);
+  --shadow-float: var(--shadow-float);
+  --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  html {
+    background: var(--canvas);
+  }
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection {
+    background: var(--blue-bg);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button {
+    cursor: pointer;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  /* Theme switches cross-fade instead of snapping. */
+  html.theme-transition,
+  html.theme-transition * {
+    transition:
+      background-color 250ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 250ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 250ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+}
+
+@layer components {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  .hairline {
+    border-color: var(--line);
+  }
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      var(--surface-3) 40%,
+      var(--surface-2) 80%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+  .prose-answer p {
+    margin: 0 0 0.75em;
+  }
+  .prose-answer p:last-child {
+    margin-bottom: 0;
+  }
+  .prose-answer ul,
+  .prose-answer ol {
+    margin: 0 0 0.75em;
+    padding-left: 1.25em;
+  }
+  .prose-answer ul {
+    list-style: disc;
+  }
+  .prose-answer ol {
+    list-style: decimal;
+  }
+  .prose-answer li {
+    margin: 0.25em 0;
+  }
+  .prose-answer li::marker {
+    color: var(--ink-4);
+  }
+  .prose-answer strong {
+    font-weight: 600;
+    color: var(--ink);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

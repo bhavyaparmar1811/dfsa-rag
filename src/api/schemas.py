@@ -97,3 +97,27 @@ class MessageOut(BaseModel):
 
 class ConversationDetail(ConversationOut):
     messages: list[MessageOut]
+
+
+class ChunkOut(BaseModel):
+    """One rulebook chunk as the citation drawer shows it. `whole_text` is the full
+    rule when this chunk is one part of a rule split for embedding."""
+
+    id: str
+    key: str
+    citation: str
+    chunk_type: str
+    binding: bool
+    heading_path: list[str]
+    text: str
+    page_start: int
+    page_end: int
+    part: int | None
+    part_of: str | None
+    whole_text: str | None
+    regulator: str
+    module_code: str
+    module_name: str
+    doc_type: str
+    version: str
+    effective_date: str

@@ -11,8 +11,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import Integer, delete, func, insert, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import Integer, delete, exists, func, insert, select, update
+from sqlalchemy.orm import Session, joinedload
 
 from src.ingestion.diff import StoredChunk
 from src.ingestion.manifest import ManifestEntry
@@ -95,6 +95,11 @@ class ChunkRepository:
                 ).order_by(ChunkRow.document_id, ChunkRow.order_idx)
             )
         )  # fmt: skip
+
+    def get(self, chunk_id: str) -> ChunkRow | None:
+        """One chunk with its document loaded (the API reads it after the session)."""
+        query = select(ChunkRow).options(joinedload(ChunkRow.document))
+        return self.s.scalar(query.where(ChunkRow.id == chunk_id))
 
     def content_hashes(self, ids: Iterable[str]) -> dict[str, str]:
         """{chunk id: content_hash} for the ids that exist (the cache checks a cited
@@ -397,6 +402,12 @@ class ConversationRepository:
             conv.title = title
         conv.updated_at = utcnow()
 
+    def recent(self, limit: int) -> list[Conversation]:
+        """The most recently active conversations that have at least one message."""
+        has_messages = exists().where(Message.conversation_id == Conversation.id)
+        query = select(Conversation).where(has_messages).order_by(Conversation.updated_at.desc())
+        return list(self.s.scalars(query.limit(limit)))
+
     def recent_messages(self, conversation_id: str, n: int) -> list[Message]:
         """The last `n` messages, oldest first."""
         rows = self.s.scalars(
@@ -660,6 +671,28 @@ class EvalRunRepository:
 
     def get(self, run_id: int) -> EvalRun | None:
         return self.s.get(EvalRun, run_id)
+
+    def runs(self, kind: str | None = None) -> list[EvalRun]:
+        """Every run, newest first (results not loaded)."""
+        query = select(EvalRun)
+        if kind is not None:
+            query = query.where(EvalRun.kind == kind)
+        return list(self.s.scalars(query.order_by(EvalRun.id.desc())))
+
+    def latest_per_config(
+        self, *, kind: str, golden_hash: str, reviewed_only: bool = True
+    ) -> list[EvalRun]:
+        """The newest finished run of each config on one golden set, oldest config first."""
+        latest: dict[str, EvalRun] = {}
+        query = select(EvalRun).where(
+            EvalRun.status == "ok",
+            EvalRun.kind == kind,
+            EvalRun.golden_hash == golden_hash,
+            EvalRun.reviewed_only.is_(reviewed_only),
+        )
+        for run in self.s.scalars(query.order_by(EvalRun.id)):
+            latest[run.config_name] = run
+        return sorted(latest.values(), key=lambda r: r.id)
 
     def latest(
         self,
