@@ -1,0 +1,27 @@
+name: query-rewrite
+type: chat
+description: >
+  Turns a follow-up message into a standalone question before it is embedded
+  (Phase G), using the last turns of the conversation from SQLite. Both the
+  original and the rewritten question are logged.
+variables: [history, message]
+config:
+  temperature: 0
+  max_tokens: 200
+messages:
+  - role: system
+    content: |
+      You rewrite the latest message in a conversation about DFSA and DIFC regulation into a standalone question that can be searched without the conversation.
+
+      Rules:
+      - Resolve references to the conversation ("it", "that rule", "what about retail clients?") into explicit terms, using only what the conversation says.
+      - Keep rule numbers (e.g. "COB 3.4.2"), module names and codes (GEN, COB, MKT, AML, FPR), Law names and capitalised Defined Terms exactly as written.
+      - Do not answer the question. Do not add requirements, facts or rule numbers that are not in the conversation.
+      - If the message is already a standalone question, or starts a new topic, return it unchanged.
+      - Reply with the question only: no quotes, labels or explanation.
+  - role: user
+    content: |
+      Conversation:
+      {{history}}
+
+      Latest message: {{message}}

@@ -1,0 +1,31 @@
+name: judge-relevance
+type: chat
+description: >
+  LLM judge for answer relevance (Phase H): does the answer address what was
+  asked? Scored 1-5 on the rubric below. Refusals are scored by the refusal
+  metrics instead, not by this judge.
+variables: [question, answer]
+config:
+  temperature: 0
+  max_tokens: 400
+  response_format: json_object
+messages:
+  - role: system
+    content: |
+      You rate how well an answer addresses a question about DFSA and DIFC regulation. You judge relevance only: whether the answer responds to what was asked, not whether its content is correct.
+
+      Rubric:
+      5: answers exactly what was asked, directly, and covers every part of the question.
+      4: answers the question, but misses a minor part or includes some unneeded material.
+      3: partly answers it: a main part of the question is not addressed, or the answer is buried.
+      2: mostly about something related but different from what was asked.
+      1: does not address the question.
+
+      Reply with one JSON object and nothing else:
+      {"reasoning": "one or two sentences", "score": 4}
+  - role: user
+    content: |
+      Question: {{question}}
+
+      Answer:
+      {{answer}}

@@ -195,6 +195,43 @@ class RetrievalSettings(BaseSettings):
     context_budget_tokens: int = 6000
 
 
+class LangfuseSettings(BaseSettings):
+    """Tracing and the prompt store: self-hosted Langfuse (infra/docker-compose.yml).
+
+    Optional: without keys, or with LANGFUSE_ENABLED=false, tracing is a no-op and
+    prompts come from the git copies in prompts/, so tests and offline runs work.
+    """
+
+    model_config = _section("LANGFUSE_")
+
+    enabled: bool = True
+    # 127.0.0.1, not localhost (see QdrantSettings.url).
+    host: str = "http://127.0.0.1:3000"
+    public_key: str | None = None
+    secret_key: SecretStr | None = None
+    # Separates traces by where they ran; lowercase, no "langfuse" prefix.
+    environment: str = "development"
+    timeout_s: int = 10
+    sample_rate: float = 1.0
+
+    # --- prompts ---
+    # The label the app serves. Evals run a candidate with label "staging".
+    prompt_label: str = "production"
+    # The SDK caches each prompt this long, and keeps serving the stale copy if
+    # a refresh fails.
+    prompt_cache_ttl_s: int = 60
+    # A first fetch that fails falls back to the git copy; keep it short so an
+    # unreachable Langfuse doesn't stall a request. No retries: once a prompt is
+    # cached, a failed refresh serves the stale copy anyway.
+    prompt_fetch_timeout_s: int = 3
+    prompt_max_retries: int = 0
+
+    @property
+    def active(self) -> bool:
+        """Enabled, and both keys set."""
+        return self.enabled and bool(self.public_key and self.secret_key)
+
+
 class ChatSettings(BaseSettings):
     model_config = _section("CHAT_")
 
@@ -209,6 +246,8 @@ class PathSettings(BaseModel):
     # Derived, regenerable artifacts (Docling output, chunks, reports). Gitignored.
     parsed_dir: Path = PROJECT_ROOT / "data" / "parsed"
     sqlite_db: Path = PROJECT_ROOT / "data" / "app.db"
+    # Prompts live in git; Langfuse holds the versions and labels (Phase E3).
+    prompts_dir: Path = PROJECT_ROOT / "prompts"
 
     @property
     def sqlite_url(self) -> str:
@@ -219,6 +258,7 @@ class Settings(BaseModel):
     azure_openai: AzureOpenAISettings
     embedding: EmbeddingSettings
     qdrant: QdrantSettings
+    langfuse: LangfuseSettings
     chat: ChatSettings
     paths: PathSettings
 
@@ -233,6 +273,7 @@ def get_settings() -> Settings:
         azure_openai=AzureOpenAISettings(),
         embedding=EmbeddingSettings(),
         qdrant=QdrantSettings(),
+        langfuse=LangfuseSettings(),
         chat=ChatSettings(),
         paths=PathSettings(),
     )

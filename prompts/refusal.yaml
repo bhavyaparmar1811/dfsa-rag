@@ -1,0 +1,12 @@
+name: refusal
+type: text
+description: >
+  What the user sees instead of an answer (Phase F): when the top reranker score
+  is under the calibrated threshold (no LLM call is made), when the model says it
+  isn't confident, or when the citation validator rejects an answer. Not sent to
+  an LLM. `reason` is a sentence from the code saying which case it was.
+variables: [reason]
+prompt: |
+  I don't have a confident answer to this from the DFSA Rulebook and DIFC Laws I can search. {{reason}}
+
+  Rather than guess, I'd suggest checking the relevant DFSA Rulebook module directly or asking your compliance adviser. If you know the module or rule you have in mind (for example "COB 3.4"), you can name it in your question and I'll look there.

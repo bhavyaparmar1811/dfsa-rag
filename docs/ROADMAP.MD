@@ -16,7 +16,7 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | B | Extraction and chunking of all 11 documents | ✅ |
 | C | Storage (SQLite + Qdrant) and embedding | ✅ |
 | D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ✅ |
-| E | Langfuse: self-hosted tracing and prompt store | 🔄 |
+| E | Langfuse: self-hosted tracing and prompt store | ✅ |
 | F | Generation, grounding and refusal | ⬜ |
 | G | Chat history, query rewriting, FastAPI | ⬜ |
 | H | Evaluation: golden set, metrics, LLM judges, release gate | ⬜ |
@@ -304,15 +304,80 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **End to end**, the Market Counterparty question takes **2.6 s**: rerank of all 40 candidates 1.8 s, query embedding 0.8 s, search 42 ms, context 22 ms. On CPU it took 57 s.
 - 4 questions are not an evaluation. Phase H compares the configurations, including all three rerankers, on the golden set.
 
-## Phase E: Langfuse, self-hosted 🔄
+## Phase E: Langfuse, self-hosted ✅
 **Goal:** versioned prompts, request traces and eval datasets, all running locally.
 
 | Step | What | Files |
 |---|---|---|
-| 🔄 E1 | Langfuse **v4** in Docker (web, worker, Postgres, ClickHouse, Redis, MinIO) in the same compose file; only `langfuse-web` published (`127.0.0.1:3000`), the data stores on the compose network only; pinned images; headless setup so the project keys match `.env`; signup disabled; telemetry off. Secrets generated into `.env` by `init_langfuse_env` (never printed, never overwritten). Needs about 4–6 GB of RAM | `infra/docker-compose.yml`, `.env.example`, `scripts/init_langfuse_env.py` |
-| E2 | `LangfuseSettings` and `get_langfuse()` (does nothing when disabled, so tests run offline); `scripts/check_langfuse.py` | `src/observability/langfuse.py` |
-| E3 | Prompts as files in git (`prompts/*.yaml`: answer, query-rewrite, refusal, judge-faithfulness, judge-relevance); `sync_prompts.py` pushes changed prompts as a `staging` version; `promote_prompt.py` moves `production` only after the eval gate passes (Phase H) | `prompts/`, `src/prompts/registry.py`, `scripts/` |
-| E4 | `PromptRegistry.get(name, label)`: if Langfuse is unreachable, **falls back to the git copy**, recorded as `local-fallback` with a hash; a check at startup reports when git and production differ | `src/prompts/registry.py` |
+| ✅ E1 | Langfuse **v4** in Docker (web, worker, Postgres, ClickHouse, Redis, MinIO) in the same compose file; only `langfuse-web` published (`127.0.0.1:3000`), the data stores on the compose network only; pinned images; headless setup so the project keys match `.env`; signup disabled; telemetry off. Secrets generated into `.env` by `init_langfuse_env` (never printed, never overwritten). Walkthrough and operations: [`docs/langfuse-setup.md`](langfuse-setup.md) | `infra/docker-compose.yml`, `.env.example`, `scripts/init_langfuse_env.py`, `tests/test_init_langfuse_env.py` |
+| ✅ E2 | `LangfuseSettings` and `get_langfuse()` (a no-op client when disabled or without keys; the tests force it off, so they run offline); `check_langfuse`: health, keys, a test trace **read back** through the worker, prompt drift | `src/config/settings.py`, `src/observability/langfuse.py`, `scripts/check_langfuse.py`, `tests/test_observability.py` |
+| ✅ E3 | Prompts as files in git (`prompts/*.yaml`: answer, query-rewrite, refusal, judge-faithfulness, judge-relevance), validated (declared variables = used ones) and content-hashed; `sync_prompts` pushes changed prompts as a `staging` version; `promote_prompt` moves `production` only to a version equal to the **committed** git file, and needs `--skip-gate REASON` until Phase H's gate exists | `prompts/`, `src/prompts/files.py`, `src/prompts/sync.py`, `scripts/sync_prompts.py`, `scripts/promote_prompt.py` |
+| ✅ E4 | `PromptRegistry.get(name, label)`: if Langfuse can't serve it (unreachable, no such label, variables that don't match the code), **falls back to the git copy**, recorded as `local-fallback` with the reason and the content hash; `drift()` / `report_drift()` say per prompt whether production is what's in git | `src/prompts/registry.py`, `tests/prompts/` |
+
+**Run it:** `uv run python -m scripts.init_langfuse_env --email …` once, then `docker compose -f infra/docker-compose.yml --env-file .env up -d`; the UI is at http://127.0.0.1:3000 (use `127.0.0.1`, not `localhost`).
+
+**Pinned images:**
+- `langfuse/langfuse` and `langfuse/langfuse-worker` `4.57.0` (always bumped together)
+- `clickhouse/clickhouse-server:26.4.5.143` (v4 needs ≥ 25.12; 26.4 is Langfuse's recommendation)
+- `postgres:17.11`
+- `redis:7.4.11`
+- `cgr.dev/chainguard/minio@sha256:dc455c…` (pinned by digest; Chainguard's free tier has only `latest`)
+
+**Decisions made while building it (E1):**
+- **v4, not v3** (see the decisions log).
+- **Fewer ports than upstream.** Upstream binds web and MinIO on every network interface and publishes the data stores on localhost; here only web is published, on `127.0.0.1`. The cost: SDK media uploads (images) can't reach MinIO. We trace text only.
+- **A real Redis healthcheck.** Upstream's `redis-cli ping` exits 0 even on `NOAUTH`; ours authenticates (`REDISCLI_AUTH`) and greps for `PONG`.
+- **Secrets stay out of the terminal.** `init_langfuse_env` never prints a value and never overwrites one: changing `SALT` or `ENCRYPTION_KEY` after data exists breaks Langfuse, and database passwords only apply when a volume is first created.
+- **`NEXTAUTH_URL=http://127.0.0.1:3000`**, following the Phase C IPv6 finding.
+
+**Checkpoint results (2026-10-13):**
+- Docker Desktop 4.94.0 / Engine 29.8.2; the WSL2 VM has 7.6 GiB.
+- First start:
+  - all Prisma (Postgres) migrations and 51 ClickHouse migrations applied, with no permission errors;
+  - the v3 → v4 background migrations found 0 partitions (nothing to migrate);
+  - Langfuse detected ClickHouse 26.4.5.143 and needed neither of its workarounds for known ClickHouse bugs.
+- `/api/public/health` → `{"status":"OK","version":"4.57.0"}`; `/api/public/projects` without a key → `401`.
+- Headless setup:
+  - org and project "DFSA RAG";
+  - the UI's public key equals `LANGFUSE_PUBLIC_KEY` in `.env`;
+  - sign-up disabled.
+- Ports: only `127.0.0.1:3000` (Langfuse) and `127.0.0.1:6333-6334` (Qdrant) are published.
+- **Memory, idle: ≈ 2.6 GiB in total.**
+
+  | Container | Memory |
+  |---|---|
+  | web | 972 MiB |
+  | worker | 798 MiB |
+  | ClickHouse | 604 MiB |
+  | Qdrant | 120 MiB |
+  | Postgres | 93 MiB |
+  | MinIO | 66 MiB |
+  | Redis | 7 MiB |
+
+  The two Node.js apps use about twice what was estimated.
+- **Data survives `down` and `up`:** still one project and one key, and `check_qdrant` still shows 3,397 points, status green.
+- One harmless start-up race: the worker logs `events_full table does not exist. Retrying in 10s` while web is still migrating, then validates fine.
+- `pytest -m "not corpus"` (235) and `ruff check` are green.
+
+**Decisions made while building it (E2–E4):**
+- **Strict prompt variables.** Each file declares its variables, and they must equal the `{{…}}` it uses. `compile()` raises on a missing or an unknown variable (Langfuse's own compile leaves gaps silently), and fills in one pass, so a `{{x}}` inside a value is never substituted.
+- **One content hash** (type + messages + config, not the description), computed the same way for a git file and for a Langfuse version. It drives sync, promote and drift, and goes into every trace.
+- **Production is always in git.** Promote refuses a version whose content isn't the committed file. A rollback is a revert in git, a sync and a promote.
+- **The fallback can serve an unpromoted prompt.** When git is ahead of production (synced to staging, not promoted) and Langfuse is down, the git copy is the newer text. The trace records `local-fallback` and the hash, and the drift check shows the state.
+- **No retries on a prompt fetch, and a 60 s pause after a connection failure:** a refused connection costs ~2 s on Windows, and a cached prompt already survives a failed refresh.
+- **The refusal is a prompt too** (a text prompt with a `reason`), so its wording is versioned like the others, though it never goes to an LLM.
+
+**Checkpoint results (2026-10-14):** SDK `langfuse` 4.18.0 against server 4.57.0.
+- `check_langfuse`: health OK, keys accepted, the test trace read back after 1.1 s.
+- `sync_prompts`: the five prompts created as v1 with `staging`; a second run reports all five `unchanged`, so the hash survives the round trip through the server.
+- Registry: `get("answer", "staging")` → `langfuse` v1; `get("answer")` → `local-fallback` (`HTTP 404`, nothing promoted yet); drift: all five `awaiting-promotion`.
+- With `langfuse-web` stopped: the first `get` falls back in 2.05 s, the next ones in 0.00 s; the drift check reports all five `unreachable` in 2.0 s.
+- `promote_prompt` refuses while the prompt file has uncommitted changes.
+- **Finding:** v4 doesn't serve its traces from the legacy `api.trace.get` (404); the v2 observations API (`api.observations.get_many(trace_id=…)`) does. Phase G's `GET /traces/{id}` must use it.
+- **Finding:** `update_prompt(new_labels=…)` adds labels rather than replacing them.
+- `pytest` (260 offline + 36 corpus) and `ruff check` are green.
+
+**Not done in Phase E, on purpose:** no prompt has a `production` version yet. Promote them when Phase F has tried them, or after the first eval run (Phase H).
 
 ## Phase F: Generation, grounding and refusal ⬜
 | Step | What | Files |
@@ -381,12 +446,20 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 - The ~9 Insolvency Law references point outside the corpus.
 - `Chapter 6, section 6.2, of the General (GEN)`: the "Chapter 6" part is attributed to AML (rare, harmless).
 - Corpus updates are a manual re-download and re-run (by design, per CLAUDE.md).
+- ClickHouse writes its own system log tables constantly (503 MB in its first 30 minutes, migrations included). Measure the volume's growth; if it matters, mount a `config.d` file that disables or shortens those logs.
+- `langfuse-web` and `langfuse-worker` have no compose healthcheck yet.
+- The prompt fallback can serve git text that hasn't been promoted (see Phase E decisions); a local cache of the last production version would close that gap.
 
 ## Commands
 ```
 uv run python -m scripts.init_langfuse_env --email you@example.com  # Langfuse secrets into .env (once)
-docker compose -f infra/docker-compose.yml --env-file .env up -d
+docker compose -f infra/docker-compose.yml --env-file .env up -d     # start Qdrant + Langfuse
+docker compose -f infra/docker-compose.yml --env-file .env up -d qdrant   # start Qdrant only
+docker compose -f infra/docker-compose.yml --env-file .env stop      # stop all, keep data
 curl.exe -s http://127.0.0.1:3000/api/public/health    # Langfuse; UI at http://127.0.0.1:3000
+uv run python -m scripts.check_langfuse                # keys, a trace round trip, prompt drift
+uv run python -m scripts.sync_prompts [--dry-run] [name ...]   # git prompts -> Langfuse staging
+uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # staging -> production
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

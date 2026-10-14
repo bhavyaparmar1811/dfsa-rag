@@ -9,6 +9,37 @@ Phase E1 of the [roadmap](ROADMAP.MD). This is a record of how the local Langfus
 
 Our SQLite `traces` table stays the slim audit record. Langfuse is where you *look* at traces.
 
+## Quick reference: start and stop
+
+Run these from the repo root. The containers don't need to run all the time: start them when you work on the project, and stop them when you're done.
+
+```
+# START everything (Qdrant + Langfuse). Works after `stop` and after `down`.
+docker compose -f infra/docker-compose.yml --env-file .env up -d
+
+# STOP everything. Containers and all data are kept; they stay stopped,
+# even after a reboot or a Docker Desktop restart, until you start them again.
+docker compose -f infra/docker-compose.yml --env-file .env stop
+
+# Check: STATUS should say "Exited" (stopped) or "Up" (running)
+docker compose -f infra/docker-compose.yml --env-file .env ps -a
+```
+
+**Only Qdrant, without Langfuse** (about 2.5 GiB less RAM). This is enough for ingestion and `scripts.retrieve`. Langfuse is only needed once tracing and prompts are wired in (Phase E2 on):
+
+```
+docker compose -f infra/docker-compose.yml --env-file .env up -d qdrant
+docker compose -f infra/docker-compose.yml --env-file .env stop langfuse-web langfuse-worker postgres clickhouse redis minio
+```
+
+**Notes:**
+- **Starting** takes about 30–60 s before http://127.0.0.1:3000 answers. The four data stores must report healthy before web and worker start.
+- **Getting the RAM back in Windows:** after `stop`, quit Docker Desktop (tray icon → Quit). Otherwise Resource Saver pauses the VM a few minutes after the last container stops.
+- `stop` vs `down`: both keep the data.
+  - `stop` keeps the containers, so the next start is faster.
+  - `down` removes the containers and the network.
+- **Never use `down -v`** unless you mean to wipe everything, including the Qdrant index (see section 4).
+
 ---
 
 ## 1. What runs, and how the pieces talk
@@ -233,7 +264,7 @@ docker stats --no-stream
 
 - **Two things noticed:**
   - **ClickHouse showed 797 PIDS.** These are mostly its pre-started thread pools, which is normal.
-  - **ClickHouse wrote 503 MB to disk in 30 idle minutes.** These are its own system log tables (`query_log`, `metric_log`, `trace_log`, …). It's harmless, but the volume grows over time (see Open items).
+  - **ClickHouse wrote 503 MB to disk in its first 30 minutes** (migrations included). Most of it is its own system log tables (`query_log`, `metric_log`, `trace_log`, …). It's harmless, but the volume grows over time (see Open items).
   - Redis received about 30 MB while idle: BullMQ polling its queues.
 
 ### Step 9: tear down and recreate, and prove the data survives
@@ -256,20 +287,20 @@ docker compose ... logs --tail 25 langfuse-web
 uv run python -m scripts.check_qdrant
 ```
 - **What it does:** the Phase C smoke test, run after Qdrant's container was recreated in Step 9.
-- **Expected:** Qdrant 1.19.0; `HTTP 401` without the key; `dfsa_rules__text-embedding-3-small-1536` with **3,397 points**, status green.
+- **Result:** the same as before today:
+  - `Server: Qdrant 1.19.0`;
+  - `Without key: HTTP 401 (protected)`;
+  - `dfsa_rules__text-embedding-3-small-1536: 3397 points, status green, built with text-embedding-3-small-1536 + Qdrant/bm25-k1.2-b0.75-avg124, schema v1`.
+
+  The index lives in the `qdrant_data` volume, not in the container.
 
 ---
 
 ## 4. Day-to-day operation
 
+Start and stop are in the [quick reference](#quick-reference-start-and-stop) at the top.
+
 ```
-# start everything (Qdrant + Langfuse)
-docker compose -f infra/docker-compose.yml --env-file .env up -d
-
-# stop everything, keep containers and data (resume with `start`)
-docker compose -f infra/docker-compose.yml --env-file .env stop
-docker compose -f infra/docker-compose.yml --env-file .env start
-
 # status, logs, resources
 docker compose -f infra/docker-compose.yml --env-file .env ps
 docker compose -f infra/docker-compose.yml --env-file .env logs --tail 50 langfuse-web
@@ -283,7 +314,11 @@ curl.exe -s http://127.0.0.1:3000/api/public/health
 - Stopped containers use no memory.
 - The WSL2 VM may hold freed memory as cache for a while. To return it to Windows, quit Docker Desktop, or let Resource Saver pause the VM after a few idle minutes.
 
-**Restarts:** every service has `restart: unless-stopped`, so it comes back whenever Docker Desktop starts, unless you stopped it explicitly with `stop`.
+**Restarts:** every service has `restart: unless-stopped`.
+- A container that was **running** when Docker Desktop quit, or the laptop shut down, starts again by itself the next time Docker Desktop starts.
+- A container you stopped with `stop`, or removed with `down`, stays stopped.
+
+So run `stop` before you shut down if you don't want the stack back automatically.
 
 **Commands that destroy data:**
 - `docker compose ... down -v` deletes **all volumes**: Langfuse's data **and the Qdrant index** (about $0.012 and a minute to rebuild with `ingest`).
@@ -297,7 +332,41 @@ Migrations run by themselves on start. Read the release notes before a jump of s
 
 ---
 
-## 5. Troubleshooting
+## 5. Using it from the code (E2–E4)
+
+**Client (E2):** `src/observability/langfuse.py`. `get_langfuse()` returns the one SDK client, configured from `LangfuseSettings` (`LANGFUSE_*` in `.env`). Without keys, or with `LANGFUSE_ENABLED=false`, it returns a no-op client: observations can be opened and updated, nothing is sent. The tests force `LANGFUSE_ENABLED=false` (`tests/conftest.py`), so they never touch the server.
+
+```
+uv run python -m scripts.check_langfuse            # health, keys, a test trace read back, prompt drift
+uv run python -m scripts.check_langfuse --no-trace
+```
+
+**Prompts (E3–E4):** the text lives in git, in `prompts/<name>.yaml`; Langfuse holds the versions and the labels.
+
+```
+edit prompts/answer.yaml
+uv run python -m scripts.sync_prompts --dry-run    # what would change
+uv run python -m scripts.sync_prompts              # new version, labelled staging
+(Phase H) eval run against the staging label
+git commit prompts/answer.yaml
+uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # production -> the staging version
+```
+
+- **Sync** compares the content hash of the git file with the newest Langfuse version. Same content: nothing happens (or `staging` is put back on it). Different: a new version, labelled `staging`, with commit message `git <content hash> @ <git commit>`. `production` is never touched.
+- **Promote** moves `production`, and only to a version whose content equals the **committed** git file. So production is always something in git, and a rollback is: revert the file, sync, promote. Until Phase H builds the eval gate, it needs `--skip-gate REASON`.
+- **`PromptRegistry.get(name)`** serves `production` from Langfuse (the SDK caches it for 60 s and serves the stale copy if a refresh fails). When Langfuse can't serve it, the registry uses the git copy, and the result says so: `source` is `langfuse`, `local-fallback` (with the reason), or `local` (Langfuse off), plus the content hash. Phase G stores this in every trace.
+- **Drift check** (`check_langfuse`, and the API at startup in Phase G): per prompt, `in-sync` (production = git), `awaiting-promotion` (staging = git), `not-synced` (run sync), or `unreachable`.
+
+**Findings while building it (2026-10-14, SDK `langfuse` 4.18.0, server 4.57.0):**
+- **v4 doesn't serve its traces from the legacy trace endpoint.** A trace sent by the SDK is stored (visible in the UI and in `GET /api/public/v2/observations?traceId=…`), but `api.trace.get(id)` answers 404. `check_langfuse` reads the observations back instead. Phase G's `GET /traces/{id}` should do the same.
+- **`update_prompt(new_labels=…)` adds labels; it doesn't replace them.** A label is unique across versions, so adding it to one version removes it from the previous one.
+- **Config round trip:** Langfuse returns `0.0` as `0`, so the content hash treats whole floats as ints; otherwise every sync would create a new version.
+- **A refused connection costs ~2 s on Windows** (`127.0.0.1`, nothing listening). With no cached copy, every request would pay it again, so after a connection failure the registry serves git without retrying for `prompt_cache_ttl_s` (60 s). Measured: 2.05 s for the first request, then 0.00 s.
+- The SDK logs its own `Error while fetching prompt …` on a failed fetch, besides the registry's warning.
+
+---
+
+## 6. Troubleshooting
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
@@ -307,11 +376,13 @@ Migrations run by themselves on start. Read the release notes before a jump of s
 | Login loops, or the cookie isn't kept | You opened `localhost` instead of `127.0.0.1` | Use http://127.0.0.1:3000 |
 | `curl: (7) Failed to connect` on port 3000 | web not started yet, or port 3000 already in use | Check `ps`; read web's logs for `Ready` or a bind error |
 | `events_full table does not exist. Retrying` (worker, at start) | A start-up race with web's migrations | Harmless if `All prerequisites validated` follows |
+| A prompt's `source` is `local-fallback` with `HTTP 404 Prompt not found` | No version of it carries `production` yet | `sync_prompts`, then `promote_prompt` |
+| `check_langfuse`: keys accepted, but the trace is never read back | The worker isn't processing (Redis, MinIO, ClickHouse) | `logs --tail 50 langfuse-worker` |
 
 ---
 
-## 6. Open items
+## 7. Open items
 - **ClickHouse system logs**: 503 MB was written in the first 30 minutes, which includes the migrations, so the idle rate is not measured yet. Check the volume size after a few days with `docker system df -v`. A config file mounted into `/etc/clickhouse-server/config.d/` can disable or shorten (TTL) `query_log`, `metric_log`, `trace_log`, etc. Not done yet.
 - web and worker have no healthcheck in compose. `/api/public/health` (web) and the worker's internal port 3030 could be used.
 - SDK media uploads don't work, because MinIO has no host port. Text-only tracing doesn't need them.
-- Next, in **E2**: `LangfuseSettings`, `get_langfuse()` (does nothing when disabled, so tests stay offline) and `scripts/check_langfuse.py` (an authenticated SDK check with the keys in `.env`).
+- No prompt has a `production` version yet: all five are `staging` v1. Promote them once Phase F has tried them (`--skip-gate`), or after Phase H's first eval run.

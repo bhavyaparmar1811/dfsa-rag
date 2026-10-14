@@ -3,7 +3,17 @@ from alembic import command
 from alembic.config import Config
 
 from src.config.settings import PROJECT_ROOT
+from src.observability.langfuse import get_langfuse
 from src.storage.db import make_engine
+
+
+@pytest.fixture(autouse=True)
+def langfuse_off(monkeypatch):
+    """Tests never trace to, or fetch prompts from, the Langfuse in `.env`."""
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    get_langfuse.cache_clear()
+    yield
+    get_langfuse.cache_clear()
 
 
 @pytest.fixture
