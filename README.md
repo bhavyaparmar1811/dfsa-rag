@@ -356,15 +356,6 @@ docs/                       architecture.md, WRITEUP.md (case study), ROADMAP.MD
 - **Corpus updates are manual:** re-download, then re-run. The hash-based ingest re-embeds only what changed.
 - **The answer cache only catches exact repeats.** Its calibration pairs were also drafted by an LLM from the golden set.
 
-## Roadmap
-
-- [x] Ingestion, storage, hybrid retrieval and reranking, grounded generation, chat API, tracing, evaluation and release gate
-- [x] Cost reporting across all spend; an answer cache with a tracked hit rate (exact repeats, by measurement)
-- [ ] Web UI: chat with inline citations, rule viewer, trace inspector
-- [ ] An equivalence check (LLM or cross-encoder) that could make semantic cache hits safe
-- [ ] VARA (Dubai's virtual-asset regulator) as a second regulator, filterable per question
-
-The full build log, with the findings and decisions behind each phase, is in [`docs/ROADMAP.MD`](docs/ROADMAP.MD).
 
 ---
 
