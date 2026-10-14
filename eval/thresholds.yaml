@@ -1,0 +1,45 @@
+# Release gate (Phase H): src/eval/gate.py checks an e2e eval run against these.
+#
+#   uv run python -m src.eval.gate --run latest
+#
+# A prompt version is promoted (scripts/promote_prompt.py) only with a passing
+# e2e run that used exactly its content, on the current golden set. A retrieval
+# config change is released the same way: an e2e run with that config must pass.
+#
+# Floors and ceilings are set from the baseline run, a little below (above) the
+# measured value, never guessed. A limit left null fails the gate with "not set",
+# so the gate can't pass by accident before the baseline exists.
+
+# The production retrieval config; its last passing run is the regression baseline.
+config: hybrid_rerank
+
+# Only runs over reviewed items count, and at least this many of them.
+min_reviewed_items: 40
+
+# Calibration target for the refusal threshold (src/eval/calibrate.py): the highest
+# threshold that refuses at most this share of answerable questions.
+max_false_refusal: 0.05
+
+floors:            # metric >= limit
+  # Set from the baseline, e2e run #13 (2026-10-14, 59 reviewed items, 64 turns,
+  # production prompts, refusal_threshold 0.40); measured value in brackets.
+  recall@6: 0.92          # [0.944]
+  mrr: 0.82               # [0.848]
+  faithfulness: 0.97      # [0.995]
+  refusal_recall: 0.90    # [1.000]  10 unanswerable turns: one miss is allowed
+  citation_recall: 0.95   # [0.980]
+  # Relevance: judge-relevance v2 (run #14: 51 answers scored 5, the wrong-regime
+  # answer 2). v1 gave 4 to every answer (its example reply was {"score": 4}), so it
+  # was not gated in run #13. Each answer scored 2 instead of 5 costs ~0.06.
+  relevance: 4.80         # [4.94, run #14]
+
+ceilings:          # metric <= limit
+  false_refusal_rate: 0.08      # [0.056 = 3 of 54]; 4 of 54 passes, 5 fails
+  validator_failure_rate: 0.05  # [0.031 = 2 of 64]; 3 of 64 passes
+  contradicted_claims: 2        # [1]
+  errors: 0
+  judge_errors: 2
+
+# A floor metric may not drop more than this share below the last passing run of
+# `config` on the same golden set (relative: 0.03 = 3%).
+max_regression: 0.03

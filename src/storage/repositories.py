@@ -1,4 +1,4 @@
-"""Reads and writes for the ingestion and chat tables. The rest of the app never touches
+"""Reads and writes for the ingestion, chat and eval tables. The rest of the app never touches
 the ORM models directly, so the storage backend can change behind this file.
 
 Each repository wraps a `Session` and never commits: the caller decides the
@@ -21,6 +21,8 @@ from src.storage.models import (
     ChunkTerm,
     Conversation,
     Document,
+    EvalResult,
+    EvalRun,
     IngestionRun,
     Message,
     Trace,
@@ -420,3 +422,85 @@ class TraceRepository:
         totals = row(self.s.execute(select(*cols)).one())
         by_day = self.s.execute(select(day, *cols).group_by(day).order_by(day)).all()
         return totals | {"by_day": [{"day": d} | row(rest) for d, *rest in by_day]}
+
+
+# --- evals --------------------------------------------------------------------
+
+
+class EvalRunRepository:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def start(self, run: EvalRun) -> EvalRun:
+        self.s.add(run)
+        self.s.flush()
+        return run
+
+    def add_result(self, result: EvalResult) -> EvalResult:
+        self.s.add(result)
+        self.s.flush()
+        return result
+
+    def finish(
+        self,
+        run_id: int,
+        *,
+        metrics: dict,
+        cost_usd: dict,
+        gate_status: str = "not_gated",
+        gate_report: dict | None = None,
+        error: str | None = None,
+    ) -> EvalRun:
+        run = self.s.get(EvalRun, run_id)
+        run.metrics, run.cost_usd = metrics, cost_usd
+        run.gate_status, run.gate_report = gate_status, gate_report
+        run.status = "error" if error else "ok"
+        run.error = error
+        run.finished_at = utcnow()
+        return run
+
+    def set_gate(self, run_id: int, gate_status: str, gate_report: dict) -> None:
+        run = self.s.get(EvalRun, run_id)
+        run.gate_status, run.gate_report = gate_status, gate_report
+
+    def get(self, run_id: int) -> EvalRun | None:
+        return self.s.get(EvalRun, run_id)
+
+    def latest(
+        self,
+        *,
+        kind: str | None = None,
+        config_name: str | None = None,
+        golden_hash: str | None = None,
+        gate_status: str | None = None,
+        before: int | None = None,
+    ) -> EvalRun | None:
+        """The newest finished (status ok) run matching every filter given."""
+        query = select(EvalRun).where(EvalRun.status == "ok")
+        for column, value in (
+            (EvalRun.kind, kind),
+            (EvalRun.config_name, config_name),
+            (EvalRun.golden_hash, golden_hash),
+            (EvalRun.gate_status, gate_status),
+        ):
+            if value is not None:
+                query = query.where(column == value)
+        if before is not None:
+            query = query.where(EvalRun.id < before)
+        return self.s.scalar(query.order_by(EvalRun.id.desc()).limit(1))
+
+    def results(self, run_id: int) -> list[EvalResult]:
+        query = select(EvalResult).where(EvalResult.run_id == run_id)
+        return list(self.s.scalars(query.order_by(EvalResult.id)))
+
+    def runs_with_prompt(self, name: str, content_hash: str, golden_hash: str) -> list[EvalRun]:
+        """Finished e2e runs on this golden set that used exactly this prompt
+        content, newest first. Few rows, so the JSON is matched in Python."""
+        query = select(EvalRun).where(
+            EvalRun.kind == "e2e", EvalRun.status == "ok", EvalRun.golden_hash == golden_hash
+        )
+        return [
+            run
+            for run in self.s.scalars(query.order_by(EvalRun.id.desc()))
+            if any(p.get("name") == name and p.get("hash") == content_hash for p in run.prompts)
+        ]

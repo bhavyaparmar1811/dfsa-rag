@@ -169,6 +169,8 @@ class RetrievalSettings(BaseSettings):
         default_factory=lambda: {
             "BAAI/bge-reranker-v2-m3": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
             "BAAI/bge-reranker-base": "2cfc18c9415c912f9d8155881c133215df768a70",
+            # Phase H compares it against the two above.
+            "cross-encoder/ms-marco-MiniLM-L6-v2": "233902d25c440f23af6f7d6e94d2946bac0bee0a",
         }
     )
     # Load the reranker from the local Hugging Face cache only: no request to the Hub
@@ -185,9 +187,16 @@ class RetrievalSettings(BaseSettings):
     def reranker_revision(self) -> str | None:
         return self.reranker_revisions.get(self.reranker_model)
 
-    # The top reranker score is the confidence signal. None = not calibrated yet:
-    # Phase H calibrates it on the golden set. Never guess it.
-    refusal_threshold: float | None = None
+    # The top reranker score is the confidence signal: below this, refuse before
+    # the LLM. Calibrated on the reviewed golden set (eval run #12, 2026-10-14,
+    # bge-reranker-v2-m3): all 10 unanswerable turns score <= 0.374, and only 1 of
+    # 54 answerable turns scores below 0.40 (GEN 6.4.2, 0.223). The 5% cap rule
+    # (src/eval/calibrate.py) gave 0.525, which also refuses COB 3.4.1's
+    # execution-only exemption (0.430) without catching anything more; the owner
+    # chose 0.40. Margins are thin (0.026 above the highest unanswerable, 0.030 below
+    # the next answerable): re-calibrate when the golden set or the reranker changes.
+    # None disables the gate (every answer goes to the LLM, gate "uncalibrated").
+    refusal_threshold: float | None = 0.40
 
     # --- context assembly (what the LLM sees) ---
     # none: the hits only; section: the whole section when it fits in
@@ -284,6 +293,11 @@ class PathSettings(BaseModel):
     sqlite_db: Path = PROJECT_ROOT / "data" / "app.db"
     # Prompts live in git; Langfuse holds the versions and labels (Phase E3).
     prompts_dir: Path = PROJECT_ROOT / "prompts"
+    # Phase H: the golden set (committed), the release-gate limits (committed) and
+    # the run reports (gitignored).
+    golden_set: Path = PROJECT_ROOT / "data" / "eval" / "golden.yaml"
+    eval_thresholds: Path = PROJECT_ROOT / "eval" / "thresholds.yaml"
+    eval_reports: Path = PROJECT_ROOT / "data" / "eval" / "reports"
 
     @property
     def sqlite_url(self) -> str:

@@ -1,0 +1,649 @@
+# Golden eval set (Phase H). Schema and rules: src/eval/golden.py.
+#
+#   uv run python -m src.eval.golden --check
+#
+# gold:        provisions that must be retrieved and should be cited (grade 2)
+# supporting:  provisions that help but aren't required (grade 1)
+# Provision ids are chunk keys without the "#pN" part suffix. A rule and its
+# Guidance are separate provisions.
+#
+# Drafted by Claude from the chunk text in data/app.db and approved by the project
+# owner (2026-10-14). New items start as `reviewed: false`: only reviewed items
+# count for calibration and the release gate.
+version: 1
+items:
+  # --- COB ---------------------------------------------------------------------
+  - id: cob-suitability-before-recommending
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Do we need to assess whether an investment is suitable for a client before we recommend it to them?"
+        expect: answer
+        gold: [COB 3.4.2]
+        supporting: [COB 3.4.2 Guidance, COB 3.4.1]
+        notes: "Yes: reasonable basis for considering the recommendation suitable (3.4.2(1)); the Guidance lists the minimum client information."
+
+  - id: cob-assessed-professional-individual
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "What net assets does an individual need to be classified as an assessed Professional Client?"
+        expect: answer
+        gold: [COB 2.3.7]
+        supporting: [COB 2.4.2, COB 2.3.7 Guidance]
+        notes: "At least $1 million (2.3.7(1)(a)); the primary residence is excluded from the calculation (2.4.2)."
+
+  - id: cob-default-retail-classification
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "If a client doesn't qualify as a Professional Client or a Market Counterparty, how must we classify them?"
+        expect: answer
+        gold: [COB 2.3.2]
+        supporting: [COB 2.3.1]
+        notes: "As a Retail Client."
+
+  - id: cob-classification-records-retention
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "How long do we have to keep the records showing how we classified a client?"
+        expect: answer
+        gold: [COB 2.5.2]
+        supporting: [COB 2.5.1]
+        notes: "At least six years from the end of the business relationship."
+
+  - id: cob-periodic-statement-frequency
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "How often must an investment manager send periodic statements to its clients?"
+        expect: answer
+        gold: [COB 6.10.2]
+        notes: "Six-monthly; monthly with uncovered open positions in Contingent Liability Investments; or an interval agreed on the client's initiative."
+
+  - id: cob-amending-retail-client-agreement
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "How much notice must we give a retail client before providing services on amended Client Agreement terms?"
+        expect: answer
+        gold: [COB 3.3.3]
+        notes: "At least 14 days, unless impracticable, where the agreement allows amendment without prior written consent."
+
+  - id: cob-personal-account-dealing
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "What controls must we have over employees' personal account trading?"
+        expect: answer
+        gold: [COB 6.2.1]
+        supporting: [COB 6.2.2, COB 6.2.5]
+        notes: "Written notice of the conditions, the firm's permission, records (6.2.5)."
+
+  - id: cob-cfd-margin-major-fx
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "What is the minimum margin a retail client must post to open a CFD on a major currency pair?"
+        expect: answer
+        gold: [COB 6.16.6]
+        supporting: [COB 6.16.2]
+        notes: "3.3% of the exposure."
+
+  - id: cob-crowdfunding-credit-card
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Can retail investors use a credit card to invest through our crowdfunding platform?"
+        expect: answer
+        gold: [COB 11.3.20]
+        supporting: [COB 11.3.20 Guidance]
+        notes: "No: reasonable steps to prevent it; a debit card is allowed with adequate systems (Guidance)."
+
+  - id: cob-category-4-client-money
+    kind: single
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Is a Category 4 firm allowed to hold client money?"
+        expect: answer
+        gold: [COB 6.12.2]
+        notes: "No, except when Operating an ATS, Operating a Crowdfunding Platform or providing Money Transmission."
+
+  # --- GEN ---------------------------------------------------------------------
+  - id: gen-principle-conflicts
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "Which Principle for Authorised Firms deals with conflicts of interest, and what does it require?"
+        expect: answer
+        gold: [GEN 4.2.7]
+        notes: "Principle 7: identify and then prevent or manage conflicts."
+
+  - id: gen-cyber-incident-notification
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "How quickly do we have to tell the DFSA about a material cyber incident?"
+        expect: answer
+        gold: [GEN 5.5.19]
+        supporting: [GEN 5.5.19 Guidance]
+        notes: "As soon as reasonably practicable and no later than 72 hours after becoming aware."
+
+  - id: gen-whistleblowing-policies
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "What whistleblowing arrangements does an Authorised Person need to have?"
+        expect: answer
+        gold: [GEN 5.4.2]
+        supporting: [GEN 5.4.3, GEN 5.4.1, GEN 5.4.3 Guidance]
+        notes: "Policies and procedures to facilitate, assess and escalate reported regulatory concerns; a written record of each (5.4.3)."
+
+  - id: gen-complaint-acknowledgement
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "What must we do when we receive a complaint from a retail client, and how quickly should we acknowledge it?"
+        expect: answer
+        gold: [GEN 9.2.3, GEN 9.2.4 Guidance]
+        supporting: [GEN 9.2.5]
+        notes: "Acknowledge promptly in writing with contact details (9.2.3); the DFSA considers 7 days adequate (9.2.4 Guidance)."
+
+  - id: gen-regulatory-status-disclosure
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "What regulatory status wording do we have to put on our letterhead and website?"
+        expect: answer
+        gold: [GEN 6.4.2]
+        supporting: [GEN 6.4.1]
+        notes: "'Regulated by the Dubai Financial Services Authority' or 'Regulated by the DFSA'."
+
+  - id: gen-auditor-resignation
+    kind: single
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "Our auditor has resigned. Do we have to notify the DFSA?"
+        expect: answer
+        gold: [GEN 8.4.2]
+        supporting: [GEN 8.4.3]
+        notes: "Yes, immediately, using the AFN form; and fill the vacancy (8.4.3)."
+
+  # --- AML ---------------------------------------------------------------------
+  - id: aml-cdd-timing
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "When do we have to carry out customer due diligence on a new customer?"
+        expect: answer
+        gold: [AML 7.2.1]
+        supporting: [AML 7.1.1, AML 7.2.2]
+        notes: "When establishing the business relationship; again on doubts about earlier CDD data or suspected money laundering."
+
+  - id: aml-verification-after-onboarding
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "Can we start a business relationship before we have finished verifying the customer's identity?"
+        expect: answer
+        gold: [AML 7.2.2]
+        supporting: [AML 7.2.2 Guidance]
+        notes: "Only if the listed conditions are met, e.g. deferral is necessary not to interrupt normal business and verification is completed as soon as reasonably practicable."
+
+  - id: aml-mlro-appointment
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "Who must we appoint as MLRO and does that person have to live in the UAE?"
+        expect: answer
+        gold: [AML 11.2.1]
+        supporting: [AML 11.2.1 Guidance, GEN 7.5.2]
+        notes: "A suitable individual with seniority and independence; resident in the UAE except for a Registered Auditor or Representative Office."
+
+  - id: aml-record-retention
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "How long must we keep customer due diligence records?"
+        expect: answer
+        gold: [AML 14.4.1]
+        notes: "At least six years from the later of the report, the end of the relationship or the completed transaction."
+
+  - id: aml-annual-return
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "When is the annual AML return due and what period does it cover?"
+        expect: answer
+        gold: [AML 14.5.1]
+        notes: "By the end of September; 1 August of the previous year to 31 July."
+
+  - id: aml-reliance-third-party
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "Can we rely on another firm to carry out customer due diligence for us?"
+        expect: answer
+        gold: [AML 8.1.1]
+        supporting: [AML 8.1.2, AML 8.1.2 Guidance]
+        notes: "Yes, on the listed third parties and conditions."
+
+  - id: aml-mlro-internal-report
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "What must the MLRO do after an employee reports a suspicion of money laundering?"
+        expect: answer
+        gold: [AML 13.3.1]
+        supporting: [AML 13.2.2, AML 13.3.2, AML 13.3.3]
+        notes: "Without delay: inquire and document, decide whether a SAR is required, and make it if so."
+
+  - id: aml-relevant-person
+    kind: single
+    module: AML
+    reviewed: true
+    turns:
+      - question: "Who is a 'Relevant Person' for the purposes of the AML module?"
+        expect: answer
+        gold: [AML 1.1.2]
+        supporting: [GLO Relevant Person, AML 3.2.1]
+        notes: "An Authorised Firm other than a Credit Rating Agency, an Authorised Market Institution, a DNFBP or a Registered Auditor."
+
+  # --- MKT ---------------------------------------------------------------------
+  - id: mkt-inside-information-timing
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "When does a listed company have to disclose inside information to the market?"
+        expect: answer
+        gold: [MKT 4.2.1]
+        supporting: [MKT 4.2.1 Guidance]
+        notes: "Timely; as soon as possible per the Guidance."
+
+  - id: mkt-delay-disclosure
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "Can a Reporting Entity delay announcing inside information?"
+        expect: answer
+        gold: [MKT 4.2.2]
+        supporting: [MKT 4.2.2A, MKT 4.2.3]
+        notes: "Yes, to protect legitimate interests, if not likely to mislead and selective disclosure follows 4.2.3."
+
+  - id: mkt-close-period-dealing
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "Can directors deal in the company's shares between the financial year end and the publication of the annual results?"
+        expect: answer
+        gold: [MKT 3.4.2]
+        supporting: [MKT 3.4.3, MKT 3.4.4, MKT 3.4.1]
+        notes: "No, that is a close period, except with prior clearance (3.4.3) or the 3.4.4 cases."
+
+  - id: mkt-related-party-transaction
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "When does a related party transaction need shareholder approval?"
+        expect: answer
+        gold: [MKT 3.5.3]
+        supporting: [MKT 3.5.2, MKT 3.5.4]
+        notes: "When its value exceeds 5% of net assets; below that, a notice to the DFSA."
+
+  - id: mkt-sponsor-requirement
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "Can the DFSA require an issuer making a Prospectus Offer to appoint a sponsor?"
+        expect: answer
+        gold: [MKT 7.1.2]
+        supporting: [MKT 7.1.2 Guidance]
+        notes: "Yes, where it considers it appropriate (or require third party certification)."
+
+  - id: mkt-prospectus-publication
+    kind: single
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "Once the DFSA approves our prospectus, when do we have to make it public?"
+        expect: answer
+        gold: [MKT 2.6.3]
+        notes: "As soon as reasonably practicable, and at the latest at the beginning of the offer."
+
+  # --- FPR ---------------------------------------------------------------------
+  - id: fpr-private-fund-passport
+    kind: single
+    module: FPR
+    reviewed: true
+    turns:
+      - question: "How does the manager of a DIFC Private Fund start using the fund passporting procedure?"
+        expect: answer
+        gold: [FPR 3.1.2]
+        supporting: [FPR 3.1.3, FPR 3.1.1]
+        notes: "Notify the DFSA of the intention that the fund be a Passported Fund; content of the notice in 3.1.3."
+
+  - id: fpr-dfsa-passport-timeline
+    kind: single
+    module: FPR
+    reviewed: true
+    turns:
+      - question: "After the DFSA receives a complete passport notice for a Private Fund, how long does it take to notify the Host Regulator?"
+        expect: answer
+        gold: [FPR 3.1.4]
+        supporting: [FPR 3.1.5]
+        notes: "Within 5 business days, subject to 3.1.5."
+
+  - id: fpr-public-fund-custodian
+    kind: single
+    module: FPR
+    reviewed: true
+    turns:
+      - question: "Does a passported Public Fund need a custodian?"
+        expect: answer
+        gold: [FPR 6.5.3]
+        supporting: [FPR 6.5.4]
+        notes: "Yes, at all times, except a Property Fund; authorised by the SCA."
+
+  - id: fpr-deregistration
+    kind: single
+    module: FPR
+    reviewed: true
+    turns:
+      - question: "On what grounds can the DFSA de-register a Passported Fund?"
+        expect: answer
+        gold: [FPR 8.1.2]
+        supporting: [FPR 8.1.5, FPR 8.1.6]
+        notes: "Non-compliance, at the Fund Manager's written request, on winding-up, etc."
+
+  # --- GLO (definitions) -------------------------------------------------------
+  - id: glo-retail-client
+    kind: single
+    module: GLO
+    reviewed: true
+    turns:
+      - question: "What is a Retail Client?"
+        expect: answer
+        gold: [GLO Retail Client, COB 2.3.2]
+        notes: "The Phase F checkpoint question."
+
+  - id: glo-pep
+    kind: single
+    module: GLO
+    reviewed: true
+    turns:
+      - question: "Who counts as a Politically Exposed Person?"
+        expect: answer
+        gold: [GLO Politically Exposed Person (PEP)]
+        supporting: [AML 7.3.8]
+
+  - id: glo-restricted-speculative-investment
+    kind: single
+    module: GLO
+    reviewed: true
+    turns:
+      - question: "What is a Restricted Speculative Investment?"
+        expect: answer
+        gold: [COB 6.16.2]
+        supporting: [GLO Restricted Speculative Investment]
+        notes: "GLO only points to COB 6.16.2, which holds the definition."
+
+  # --- Laws: resolving a term defined in a DIFC Law ----------------------------
+  - id: law-relevant-person
+    kind: laws_term
+    module: REG_LAW
+    reviewed: true
+    turns:
+      - question: "How does the Regulatory Law define a 'Relevant Person' for its anti-money laundering Part?"
+        expect: answer
+        gold: [Regulatory Law Art. 70]
+        supporting: [Regulatory Law Sch. 1 'Relevant Person', AML 1.1.2]
+        notes: "Art. 70(5): an Authorised Person, a Registered Auditor, a DNFBP, or an officer, employee or agent of one. (The first draft asked about 'the AML rules', whose answer is AML 1.1.2: see aml-relevant-person.)"
+
+  - id: law-inside-information
+    kind: laws_term
+    module: MARKETS_LAW
+    reviewed: true
+    turns:
+      - question: "How does the Markets Law define inside information?"
+        expect: answer
+        gold: [Markets Law Art. 63]
+        supporting: [GLO Inside Information]
+        notes: "Precise, not generally available, relating to the Reporting Entity or Investments, likely to have a significant price effect."
+
+  - id: law-special-resolution
+    kind: laws_term
+    module: COLLECTIVE_INVESTMENT_LAW
+    reviewed: true
+    turns:
+      - question: "What majority of Unitholders' votes is needed to pass a Special Resolution of a Fund?"
+        expect: answer
+        gold: [Collective Investment Law Sch. 1 'Special Resolution']
+        supporting: [Regulatory Law Sch. 1 'Special Resolution', Investment Trust Law Sch. 1 'Special Resolution']
+        notes: "Not less than 75% of the votes validly cast. The other two Laws only point to the Collective Investment Law."
+
+  - id: law-financial-services-prohibition
+    kind: laws_term
+    module: REG_LAW
+    reviewed: true
+    turns:
+      - question: "What is the Financial Services Prohibition?"
+        expect: answer
+        gold: [Regulatory Law Art. 41]
+        supporting: [Regulatory Law Sch. 1 'Financial Services Prohibition']
+        notes: "No person may carry on a Financial Service in or from the DIFC (Art. 41(1)), subject to the exemptions."
+
+  # --- Exemptions: the answer depends on a scope or exclusion rule -------------
+  - id: exm-client-agreement-market-counterparty
+    kind: exemption
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Do we need a Client Agreement with a Market Counterparty?"
+        expect: answer
+        gold: [COB 3.3.1]
+        supporting: [COB 3.3.2, GLO Market Counterparty]
+        notes: "No: section 3.3 doesn't apply with a Market Counterparty (3.3.1(a)). Phase D's manual check question."
+
+  - id: exm-suitability-execution-only
+    kind: exemption
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Do we have to do a suitability assessment for an execution-only trade?"
+        expect: answer
+        gold: [COB 3.4.1]
+        supporting: [COB 3.4.2]
+        notes: "No: 3.4.1(b) excludes Execution-Only Transactions."
+
+  - id: exm-best-execution-market-counterparty
+    kind: exemption
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Do the best execution rules apply when we trade with a Market Counterparty?"
+        expect: answer
+        gold: [COB 6.4.1]
+        supporting: [COB 6.4.2]
+        notes: "No: 6.4.1(1)(a)."
+
+  - id: exm-exempt-offer-under-50
+    kind: exemption
+    module: MKT
+    reviewed: true
+    turns:
+      - question: "Do we need a prospectus to offer securities to 30 investors in the DIFC?"
+        expect: answer
+        gold: [MKT 2.3.1]
+        supporting: [Markets Law Art. 14, MKT 2.3 Guidance, MKT 2.3.3 Guidance]
+        notes: "No, if it is directed at fewer than 50 Persons in 12 months (2.3.1(b)): an Exempt Offer."
+
+  # --- Multi-turn: follow-ups need query rewriting -----------------------------
+  - id: mt-client-agreement
+    kind: multi_turn
+    module: COB
+    reviewed: true
+    turns:
+      - question: "Do we need a Client Agreement before providing a financial service to a client?"
+        expect: answer
+        gold: [COB 3.3.2]
+        supporting: [COB 3.3.2 Guidance, COB A2.1.1]
+      - question: "What if the client is a Market Counterparty?"
+        expect: answer
+        gold: [COB 3.3.1]
+        supporting: [COB 3.3.2]
+        notes: "The follow-up only makes sense with the history."
+
+  - id: mt-confirmation-notes
+    kind: multi_turn
+    module: COB
+    reviewed: true
+    turns:
+      - question: "What is the deadline for sending a confirmation note after executing a client's transaction?"
+        expect: answer
+        gold: [COB 6.9.2]
+        notes: "No later than 2 business days after execution."
+      - question: "And how long do we have to keep copies of them?"
+        expect: answer
+        gold: [COB 6.9.3]
+        notes: "Six years from despatch."
+
+  - id: mt-mandatory-appointments
+    kind: multi_turn
+    module: GEN
+    reviewed: true
+    turns:
+      - question: "Which appointments must every Authorised Firm make?"
+        expect: answer
+        gold: [GEN 7.5.1]
+        notes: "SEO, Finance Officer, Compliance Officer, MLRO."
+      - question: "Which of those people have to be resident in the UAE?"
+        expect: answer
+        gold: [GEN 7.5.2]
+        supporting: [GEN 7.5.2 Guidance]
+        notes: "SEO, Compliance Officer and MLRO."
+      - question: "Can we outsource the MLRO role?"
+        expect: answer
+        gold: [AML 11.2.5]
+        supporting: [AML 11.2.5 Guidance]
+
+  - id: mt-enhanced-cdd-pep
+    kind: multi_turn
+    module: AML
+    reviewed: true
+    turns:
+      - question: "When do we have to apply enhanced customer due diligence?"
+        expect: answer
+        gold: [AML 7.1.1]
+        supporting: [AML 7.4.1]
+        notes: "For customers assigned as high risk."
+      - question: "What extra steps apply if the customer turns out to be a PEP?"
+        expect: answer
+        gold: [AML 7.3.8]
+        supporting: [GLO Politically Exposed Person (PEP)]
+        notes: "Senior management approval, source of wealth and funds, enhanced monitoring."
+
+  # --- Unanswerable: the system must refuse ------------------------------------
+  - id: un-vat-rate
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What is the VAT rate in the UAE?"
+        expect: refuse
+        notes: "Out of scope; top rerank score 0.003 in Phase F."
+
+  - id: un-labour-law-leave
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "How many days of annual leave are employees entitled to under UAE labour law?"
+        expect: refuse
+
+  - id: un-vara-broker-dealer
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What does VARA require to license a virtual asset broker-dealer in Dubai?"
+        expect: refuse
+        notes: "VARA is not ingested yet (Phase J)."
+
+  - id: un-nonexistent-rule
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What does COB 99.9.9 require?"
+        expect: refuse
+        notes: "Not in the corpus; the refusal should name it."
+
+  - id: un-adgm-fsra
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What are the ADGM FSRA requirements for a Category 3C licence?"
+        expect: refuse
+        notes: "Another regulator."
+
+  - id: un-corporate-tax
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What corporate tax rate applies to a company incorporated in the DIFC?"
+        expect: refuse
+
+  - id: un-pib-capital
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What CET1 capital ratio does a Category 1 bank have to maintain under the PIB module?"
+        expect: refuse
+        notes: "In-domain but PIB is not in the corpus: a plausible question the model may know."
+
+  - id: un-data-protection-fine
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What is the maximum fine for a breach of the DIFC Data Protection Law?"
+        expect: refuse
+        notes: "The Data Protection Law is only mentioned in GEN 9.2.10 Guidance, not in the corpus."
+
+  - id: un-exchange-rate
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "What is today's USD to AED exchange rate?"
+        expect: refuse
+
+  - id: un-employee-visas
+    kind: unanswerable
+    reviewed: true
+    turns:
+      - question: "How many employee visas can a DIFC company sponsor?"
+        expect: refuse

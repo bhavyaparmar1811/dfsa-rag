@@ -24,7 +24,7 @@ def build(loaded):
 def test_retrieve_end_to_end(build):
     r = build(top_n=3).retrieve("Does the Client Agreement rule apply to a Market Counterparty?")
     assert len(r.hits) == 3 and r.confidence == max(h.rerank_score for h in r.hits)
-    assert r.confident is None  # no calibrated threshold yet
+    assert r.confident is (r.confidence >= 0.40)  # the calibrated default threshold
     assert r.embed_tokens == 7
     assert set(r.timings_ms) >= {"citations", "embed", "search", "rerank", "context", "total"}
     keys = {b.key for b in r.context}

@@ -1,4 +1,4 @@
-"""SQLite tables: the ingested corpus (migration 0001) and the chat (0002).
+"""SQLite tables: the ingested corpus (migration 0001), the chat (0002) and evals (0003).
 
     documents 1 ──< chunks >── chunk_refs     what each chunk references
                        └────── chunk_terms    which Defined Terms it uses
@@ -7,6 +7,10 @@
     conversations 1 ──< messages              user and assistant turns
     traces                                    one row per chat request (= its Langfuse
                                               trace id): retrieval, answer, cost, latency
+
+    eval_runs 1 ──< eval_results              one row per eval run (config, prompts,
+                                              golden-set hash, metrics, gate) and per
+                                              golden turn (ranking, answer, judges)
 
 SQLite is the system of record: it holds every chunk, including the ones that
 are never embedded (section parents, rules that were split into parts, deleted
@@ -234,3 +238,66 @@ class Trace(Base):
     answer_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)  # per stage + total
+
+
+class EvalRun(Base):
+    """One eval run of one configuration over the golden set (Phase H).
+
+    `kind` is `retrieval` (no LLM: rankings and confidence only) or `e2e`
+    (rewrite, answer, judges). The gate and `promote_prompt` read these rows:
+    a prompt version can be promoted only with a passing e2e run that used
+    exactly its content hash on the current golden set.
+    """
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String, default="running")  # running | ok | error
+    error: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String, index=True)  # retrieval | e2e
+    config_name: Mapped[str] = mapped_column(String, index=True)  # "hybrid_rerank"
+    retrieval_config: Mapped[dict] = mapped_column(JSON, default=dict)  # incl. reranker revision
+    prompts: Mapped[list[dict]] = mapped_column(JSON, default=list)  # ResolvedPrompt.trace()
+    prompt_label: Mapped[str | None] = mapped_column(String)
+    golden_hash: Mapped[str] = mapped_column(String(64), index=True)
+    reviewed_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    n_items: Mapped[int] = mapped_column(Integer, default=0)
+    n_turns: Mapped[int] = mapped_column(Integer, default=0)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # metrics.aggregate()
+    gate_status: Mapped[str] = mapped_column(String, default="not_gated")  # passed | failed
+    gate_report: Mapped[dict | None] = mapped_column(JSON)
+    cost_usd: Mapped[dict] = mapped_column(JSON, default=dict)  # per stage + total
+    git_commit: Mapped[str | None] = mapped_column(String)
+    langfuse_run: Mapped[str | None] = mapped_column(String)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    results: Mapped[list["EvalResult"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, order_by="EvalResult.id"
+    )
+
+
+class EvalResult(Base):
+    """One golden turn in one eval run."""
+
+    __tablename__ = "eval_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("eval_runs.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[str] = mapped_column(String, index=True)
+    turn: Mapped[int] = mapped_column(Integer)  # 0-based within the conversation
+    question: Mapped[str] = mapped_column(Text)
+    rewritten_query: Mapped[str | None] = mapped_column(Text)
+    expect: Mapped[str] = mapped_column(String)  # answer | refuse
+    ranked: Mapped[list[dict]] = mapped_column(JSON, default=list)  # provision + scores, top 40
+    confidence: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str | None] = mapped_column(String)  # answered | refused (e2e only)
+    refusal_code: Mapped[str | None] = mapped_column(String)
+    answer: Mapped[str | None] = mapped_column(Text)
+    cited: Mapped[list[str]] = mapped_column(JSON, default=list)  # provision ids
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    judges: Mapped[dict | None] = mapped_column(JSON)  # raw judge outputs
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)
+    trace_id: Mapped[str | None] = mapped_column(String)

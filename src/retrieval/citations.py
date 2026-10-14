@@ -107,9 +107,18 @@ class CitationRouter:
                 law = self._canonical_law(ref.split(" Art. ")[0])
                 if law in self.laws:
                     add(f"{law} Art. {ref.split(' Art. ')[1]}")
-            elif RULE_NUMBER.match(ref) or "App" in ref:
+            elif self._is_module(ref):
                 add(ref)
         return found
+
+    def _is_module(self, ref: str) -> bool:
+        """A Rulebook citation: a known module code (in the corpus or not, so "PIB
+        1.2.1" is reported as not in the corpus) or a bare rule number. refs.py also
+        reads "Chapter 7 of the Rules" as a reference into a document named "Rules";
+        that is prose, not a provision, so it is dropped here."""
+        m = RULE_NUMBER.match(ref)
+        mod = m.group("mod") if m else ref.split(" App")[0] if " App" in ref else None
+        return mod is not None and (mod == ANY_MODULE or mod in self.codes | KNOWN_MODULES)
 
     def _canonical_law(self, name: str) -> str:
         return next((law for law in self.laws if law.lower() == name.lower()), name)

@@ -19,7 +19,7 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | E | Langfuse: self-hosted tracing and prompt store | ✅ |
 | F | Generation, grounding and refusal | ✅ |
 | G | Chat history, query rewriting, FastAPI | ✅ |
-| H | Evaluation: golden set, metrics, LLM judges, release gate | ⬜ |
+| H | Evaluation: golden set, metrics, LLM judges, release gate | 🔄 |
 | I | Cost reporting, docs, polish | ⬜ |
 | J | VARA as a second regulator | ⏸ |
 
@@ -451,15 +451,108 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
   - `/stats/cost`: 4 requests, $0.0695 in total, $0.0174 per request (answer $0.0679, rewrite $0.0017, embeddings $0.000001).
 - `pytest` (322 offline + 36 corpus) and `ruff check` are green.
 
-## Phase H: Evaluation ⬜
+## Phase H: Evaluation 🔄
+**Flow:** `golden.yaml → (rewrite) → retrieve → [answer → judges] → eval_results per turn → eval_runs summary → gate`. Built, tested, golden set approved, refusal threshold set, baseline gated (run #13). The baseline's findings and a promotion through the gate (Checkpoint 3b) remain.
+
 | Step | What | Files |
 |---|---|---|
-| H1 | Golden set: 40–60 hand-written questions covering every module, Laws-term questions, multi-turn follow-ups, exemption-dependent questions (parent expansion) and **about 10 questions it can't answer** (refusal) | `data/eval/golden.yaml` |
-| H2 | Sync the golden set to a Langfuse dataset | `scripts/sync_dataset.py` |
-| H3 | Retrieval metrics (recall@k, MRR, nDCG on **citations**, so they survive re-ingestion), refusal precision and recall, p50/p95 latency | `src/eval/metrics.py` |
-| H4 | LLM judges for faithfulness and relevance (prompts versioned in Langfuse; same-model bias noted as a limitation) | `src/eval/judges.py` |
-| H5 | `eval.run --config {dense, hybrid, hybrid_rerank} [--parent-mode …] [--prompt-label staging]`, linked to Langfuse dataset runs; Alembic 0003 `eval_runs` summary | `src/eval/run.py` |
-| H6 | Calibrate `refusal_threshold`; **release gate** against `eval/thresholds.yaml` and the last passing run, which is required before `promote_prompt` | `src/eval/calibrate.py`, `src/eval/gate.py` |
+| ✅ H1 | Golden set: **59 conversations, 64 turns** (COB 10, GEN 6, AML 8, MKT 6, FPR 4, GLO 3, Laws terms 4, exemptions 4, multi-turn 4 with 2–3 turns, unanswerable 10), drafted from the chunk text, all `reviewed: false`. Gold labels are **provision ids** (chunk key without `#pN`), graded gold (2) / supporting (1). `--check` validates the schema and that every provision is a live, retrievable chunk | `data/eval/golden.yaml`, `src/eval/golden.py` |
+| ✅ H2 | Metrics as pure functions: recall@1/3/6/20/40, MRR, nDCG@6, **context recall** (gold provisions among the blocks sent to the LLM), refusal outcomes (false-refusal rate, refusal recall and precision), citation precision and recall, validator failures, p50/p95 per stage, cost | `src/eval/metrics.py` |
+| ✅ H3 | Alembic 0003: `eval_runs` (config, prompts with content hashes, golden hash, metrics, gate report, cost per stage, git commit, Langfuse run) and `eval_results` (one per turn: ranking with scores, confidence, answer, citations, judges, latency, trace id); `EvalRunRepository` | `src/storage/models.py`, `src/storage/migrations/versions/0003_eval_tables.py`, `src/storage/repositories.py` |
+| ✅ H4 | Runner with 8 named configs (`dense`, `sparse`, `hybrid`, `hybrid_rerank` = production, two other rerankers, two parent modes). Store, embedder and BM25 are built once; one cross-encoder is in GPU memory at a time; results are written per turn; eval turns never touch `messages`/`traces`; Markdown report | `src/eval/configs.py`, `src/eval/run.py` |
+| ✅ H5 | Calibration: an offline sweep over the stored confidences picks the highest threshold that refuses ≤ 5% of answerable turns, placed mid-gap | `src/eval/calibrate.py` |
+| ✅ H6 | Judges: faithfulness (supported claims / all claims, contradictions counted separately) and relevance (1–5). Always on the `production` judge prompts (`--judge-label` grades a judge edit); a bad reply is recorded as `judge_error`, never a crash | `src/eval/judges.py` |
+| ✅ H7 | Langfuse dataset `dfsa-golden`, one item per turn (63 synced; a re-sync is a no-op). Each e2e trace is linked to its item in a dataset run `<config>-<label>-run<id>` and scored | `src/eval/dataset.py`, `scripts/sync_dataset.py` |
+| ✅ H8 | Gate: `eval/thresholds.yaml` (floors, ceilings, ≤ 3% relative regression vs the last passing production run), applied to every e2e run. `promote_prompt` now requires a passing e2e run of exactly that content hash on the current golden set; `--skip-gate` stays as a logged override | `eval/thresholds.yaml`, `src/eval/gate.py`, `scripts/promote_prompt.py` |
+| ✅ | **Checkpoint 1:** the owner approved all 59 items (`reviewed: true`); Langfuse dataset re-synced (64 items) | `data/eval/golden.yaml` |
+| ✅ | **Checkpoint 2:** reviewed-set retrieval run #12 (hybrid_rerank: r@1 0.778, r@6 0.944, r@40 0.982, MRR 0.863, nDCG@6 0.831, ctx recall 0.982); **`refusal_threshold = 0.40`** | `src/config/settings.py` |
+| ✅ | **Checkpoint 3a:** baseline e2e run #13 ($1.68, 64 turns, production prompts); floors set from it; the gate passes, so #13 is the regression baseline | `eval/thresholds.yaml` |
+| ✅ | **Checkpoint 3b:** fixed the citation-parser bug and the relevance judge; e2e run #14 with `--judge-label staging` passed the gate (now the regression baseline); relevance floor 4.80 added | `src/retrieval/citations.py`, `prompts/judge-relevance.yaml`, `eval/thresholds.yaml` |
+| ⬜ | Promote `judge-relevance` v2 through the gate, after the commit (`promote_prompt` requires a committed prompt file) | |
+
+**Baseline, e2e run #13** (2026-10-14, 59 reviewed items, 64 turns, `refusal_threshold` 0.40, production prompts):
+
+| r@6 | MRR | ctx recall | Faithfulness | Relevance | Cit. precision | Cit. recall | False refusals | Refusal recall | Validator fails | Contradicted | Turn p50 / p95 | $ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0.944 | 0.848 | 0.982 | 0.995 | 4.00 (all) | 0.858 | 0.980 | 3 / 54 | 10 / 10 | 2 / 64 | 1 | 4.9 / 6.8 s | 1.68 |
+
+- **3 false refusals:**
+  - GEN 6.4.2 (confidence 0.223): refused at the gate, the one accepted when the threshold was chosen.
+  - `fpr-private-fund-passport`: the citation validator refused a correct answer. **Bug:** "Chapter 7 of the Rules" is parsed as a provision "Rules 7" (`refs.py` treats "the Rules" as a document name, and `CitationRouter.find` accepts any module). Fix: accept only known module codes or a bare rule number.
+  - `mt-enhanced-cdd-pep[1]`: the model labelled the rule block [2] "AML 7.3.8 Guidance". The refusal is correct behaviour for a mis-cited block.
+- **1 contradicted claim, a real error caught by the faithfulness judge:** `aml-cdd-timing` said CDD comes *before* the customer risk assessment, citing AML 6.1.1(2), which says the opposite. The citation validator can't catch this, because the citation itself is valid.
+- **Wrong regime:** `mkt-inside-information-timing` answered from MKT 6.5 (listed *funds*) instead of MKT 4.2.1 (citation recall 0); the retrieval weakness seen in the preview.
+- **The relevance judge doesn't discriminate:** it gave 4 to all 51 answers, including the wrong-regime one. Its prompt's example reply is `{"score": 4}`, which anchors it, and its reasoning penalises citations as "unneeded material". Relevance is **not gated** until the prompt is fixed and re-baselined.
+- **Citation precision 0.858** is mostly answers also citing useful definitions (GLO Execute, GLO Client Agreement) that the golden `supporting` lists don't name; it isn't gated.
+- **Cost:** answers $0.85 + judges $0.82 = $0.026 per turn. Judges double the cost of an e2e run.
+- **Gate behaviour:** with a 3% regression margin and the baseline's perfect refusal recall, a single missed refusal fails the regression check even though the absolute floor (0.90) allows it.
+
+**Fixes, and e2e run #14** (2026-10-14, $1.70; the answer prompts in production, both judges on `staging`):
+- **Citation parser:** `CitationRouter.find` now accepts only a known module code (in the corpus, or another DFSA module such as PIB, reported as not in the corpus) or a bare rule number. "Chapter 7 of the Rules" and "section 3.3 of the Rules" are prose; test cases added.
+- **`judge-relevance` v2:**
+  - the example reply is a placeholder (`<an integer from 1 to 5>`), not `4`;
+  - rule citations, the rule's conditions and exceptions, and a closely connected requirement are no longer "unneeded material";
+  - an answer about a different kind of entity or regime scores at most 2.
+
+  A spot check of 5 stored answers gave 2 for the wrong-regime one and 5 for the others.
+
+| r@6 | MRR | Faithfulness | Relevance | Cit. recall | False refusals | Refusal recall | Validator fails | Contradicted | $ | Gate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0.926 | 0.860 | 0.995 | **4.94** (51×5, 1×2) | 0.981 | 2 / 54 | 10 / 10 | **1 / 64** | 1 | 1.70 | passed |
+
+- **The Private Fund passport answer is no longer refused** (the "Rules 7" bug).
+- **The relevance judge flags the MKT 6.5 / 4.2.1 wrong-regime answer with a 2.** Every other answer scores 5, so the floor (4.80) tolerates about two such answers.
+- **The one validator refusal is intended strictness:** the Market Counterparty follow-up named COB 3.3.2 in its text without listing it as a citation. Product decision for later: auto-add a provision that is named and already in the context, instead of refusing.
+- **Follow-up rewrites vary between runs even at temperature 0,** so multi-turn r@6 moved 1.00 → 0.89 (run #13 → #14). This is the main source of run-to-run noise.
+- **The AML 6.1.1 inversion recurs** (contradicted claim on `aml-cdd-timing`). It is an answer-prompt issue, still open.
+- **Re-gating #13 with the relevance floor marks it failed** (relevance 4.0 < 4.80). #14 is now the regression baseline.
+
+**Decisions made while building it:**
+- **A golden item is a conversation; a Langfuse dataset item is one turn**, so each turn's trace links to its own item.
+- **Retrieval is scored on the ranking the answer step sees:** the hits (exact citation hits pinned first), then the other candidates, by provision.
+- **Context recall is measured too.** Parent expansion and the scope-rule policy can put a gold provision in front of the LLM even when it wasn't a hit.
+- **A retrieval-only follow-up is rewritten from the earlier questions alone**, once per invocation, and shared by every config, so configs compare on the same query.
+- **A null limit fails the gate** ("not set"), so it can't pass by accident before the baseline exists. Floors come from the baseline run, not guesses.
+- **Judges grade with `production`**, not the label under test, so a staging answer prompt is never graded by a judge edited along with it.
+- **The gate reads SQLite only;** Langfuse linking is best effort.
+- **MiniLM is pinned** at `233902d2…` (from the local cache), so all three rerankers are reproducible.
+
+**Preview on the draft set** (58 unreviewed items, 63 turns; runs #2–#9; the numbers will change after the review):
+
+| Config | r@1 | r@3 | r@6 | r@40 | MRR | nDCG@6 | ctx recall | retrieve p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| dense | 0.623 | 0.802 | 0.830 | 0.962 | 0.730 | 0.766 | 0.943 | 432 / 524 ms |
+| sparse (BM25) | 0.443 | 0.641 | 0.755 | 0.962 | 0.575 | 0.601 | 0.859 | 26 / 38 ms |
+| hybrid (RRF) | 0.557 | 0.764 | 0.830 | 0.962 | 0.677 | 0.717 | 0.887 | 429 / 508 ms |
+| **hybrid + bge-reranker-v2-m3** | **0.792** | **0.906** | **0.924** | 0.962 | **0.865** | **0.832** | **0.962** | 1758 / 2408 ms |
+| hybrid + bge-reranker-base | 0.641 | 0.877 | 0.896 | 0.962 | 0.769 | 0.768 | 0.953 | 1076 / 1231 ms |
+| hybrid + MiniLM | 0.585 | 0.783 | 0.887 | 0.962 | 0.711 | 0.731 | 0.924 | 570 / 669 ms |
+
+- **The reranker is the largest single gain** (MRR 0.68 → 0.87, r@1 0.56 → 0.79), and v2-m3 beats both smaller rerankers. The D4 choice holds on 63 turns, not just 4.
+- **Hybrid RRF alone is below dense** on r@1 and MRR on this set. Its value is candidate recall (r@20 0.943 vs 0.887), which the reranker then exploits.
+- **`parent_mode=none` loses context recall on exemption questions** (0.75 vs 1.00). For "suitability for an execution-only trade?" the scope rule COB 3.4.1 is never retrieved; only the scope-rule policy puts it in front of the LLM.
+- **Weak spots:**
+  - MKT 4.2.1 ranks 12th for "when must a listed company disclose inside information"; MKT 6.5, the listed-fund equivalent, outranks it.
+  - MKT 2.3.1 ranks about 25th for the 50-investor exempt offer.
+- **Refusal signal:**
+  - All 10 unanswerable questions score ≤ 0.374 (COB 99.9.9), most ≤ 0.03.
+  - All but two answerable turns score ≥ 0.62.
+  - The calibration preview gives 0.525: 2 false refusals, 10/10 unanswerable caught. The lowest answerable turn is "what regulatory status wording on our letterhead?" (GEN 6.4.2, 0.22).
+- **A draft label was wrong and the system was right:** "Relevant Person for the AML rules" is AML 1.1.2, not Regulatory Law Art. 70. It is now two items.
+- **E2E smoke test** (run #10, 5 turns, $0.15): answers, the follow-up rewrite, the VAT refusal, judges (faithfulness 1.0, relevance 4.0) and the gate all work. The gate failed, as intended: draft items, no floors.
+- **Finding:** Langfuse v4 (events-only) doesn't serve dataset runs or run items over the public read API (404), like the Phase E trace finding. Linking is checked in the UI.
+
+**Refusal threshold: 0.40 (decided 2026-10-14, eval run #12).**
+- On the reviewed set, the 10 unanswerable turns score 0.002–0.374 and the 54 answerable turns score from 0.223 up. At 0.40 every unanswerable turn is refused before the LLM, and 1 answerable turn (GEN 6.4.2, "regulatory status wording", 0.223) is a false refusal (1.9%).
+- The calibration rule (≤ 5% false refusals, mid-gap) gave 0.525. That also refuses the execution-only exemption question (COB 3.4.1, 0.430) without catching anything more, so the owner chose 0.40.
+- The margins are thin: 0.026 above the highest unanswerable (COB 99.9.9) and 0.030 below the next answerable. Re-calibrate when the golden set or the reranker changes.
+- Live check: the VAT question scores 0.003 and is marked not confident; the Market Counterparty question scores 0.86 and goes to the LLM.
+- Two tests that assumed no threshold were updated. The e2e runner test now covers both paths: uncalibrated (the model declines) and 0.40 (refused at the gate with no LLM call).
+
+**Limitations:**
+- GPT-4o judges GPT-4o (same-model bias).
+- About 60 questions make the calibration coarse, and it is calibrated on the set it is evaluated on.
+- The golden set was drafted by Claude from the corpus and approved by the owner as a whole, not edited item by item.
 
 ## Phase I: Cost, docs, polish ⬜
 - Cost report: total, per query, embedding vs generation, refusal rate over time (`scripts/cost_report.py` and `/stats/cost`).
@@ -513,10 +606,16 @@ docker compose -f infra/docker-compose.yml --env-file .env stop      # stop all,
 curl.exe -s http://127.0.0.1:3000/api/public/health    # Langfuse; UI at http://127.0.0.1:3000
 uv run python -m scripts.check_langfuse                # keys, a trace round trip, prompt drift
 uv run python -m scripts.sync_prompts [--dry-run] [name ...]   # git prompts -> Langfuse staging
-uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # staging -> production
+uv run python -m scripts.promote_prompt answer          # staging -> production; needs a passing e2e eval run
 uv run python -m scripts.ask "Do we need a Client Agreement with a Market Counterparty?" [--label staging] [--json]
 uv run python -m scripts.ask "what about retail clients?" --conversation <id>   # a follow-up
 uv run uvicorn src.api.app:app --host 127.0.0.1 --port 8000      # the API (needs API_KEY in .env)
+uv run python -m src.eval.golden --check                # golden set: schema + every provision exists
+uv run python -m src.eval.run --retrieval-only --configs dense,sparse,hybrid,hybrid_rerank,hybrid_rerank_base,hybrid_rerank_minilm
+uv run python -m src.eval.run [--label staging] [--items a,b] [--include-unreviewed] [--dry-run]   # e2e + judges + gate
+uv run python -m src.eval.calibrate [--run ID]          # refusal threshold from the latest retrieval run
+uv run python -m src.eval.gate --run latest             # re-check a run against eval/thresholds.yaml
+uv run python -m scripts.sync_dataset [--dry-run]       # golden set -> Langfuse dataset dfsa-golden
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

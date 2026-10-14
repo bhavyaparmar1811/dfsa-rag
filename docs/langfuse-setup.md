@@ -5,7 +5,7 @@ Phase E1 of the [roadmap](ROADMAP.MD). This is a record of how the local Langfus
 **What Langfuse is for in this project:**
 - versioned prompts (E3–E4);
 - one trace per chat request (Phase G);
-- the golden eval set as a dataset, with eval runs linked to it (Phase H).
+- the golden eval set as a dataset (`dfsa-golden`), with e2e eval runs linked to it (Phase H, section 5).
 
 Our SQLite `traces` table stays the slim audit record. Langfuse is where you *look* at traces.
 
@@ -341,19 +341,26 @@ uv run python -m scripts.check_langfuse            # health, keys, a test trace 
 uv run python -m scripts.check_langfuse --no-trace
 ```
 
+**Dataset (Phase H):** `scripts/sync_dataset.py` pushes `data/eval/golden.yaml` to the dataset `dfsa-golden`, one item per golden turn (`golden-<item>-<turn>`): input = the question and the earlier questions, expected output = expect / gold / supporting provisions. Unchanged items are skipped, removed ones archived. Every e2e eval run (`src.eval.run`, with Langfuse on) links each turn's `eval-turn` trace to its item under run name `<config>-<label>-run<id>` (the SDK's own `api.dataset_run_items.create`, as `run_experiment` does), and scores the trace: `faithfulness`, `relevance`, `recall@6`, `mrr`, `citation_precision`, `refusal_correct`. The comparison view of the dataset then shows runs side by side. SQLite (`eval_runs`, `eval_results`) stays the record of truth; the gate never reads Langfuse.
+
+```
+uv run python -m scripts.sync_dataset --dry-run
+uv run python -m scripts.sync_dataset
+```
+
 **Prompts (E3–E4):** the text lives in git, in `prompts/<name>.yaml`; Langfuse holds the versions and the labels.
 
 ```
 edit prompts/answer.yaml
 uv run python -m scripts.sync_prompts --dry-run    # what would change
 uv run python -m scripts.sync_prompts              # new version, labelled staging
-(Phase H) eval run against the staging label
+uv run python -m src.eval.run --label staging      # e2e eval of the staging prompts, gated
 git commit prompts/answer.yaml
-uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # production -> the staging version
+uv run python -m scripts.promote_prompt answer     # production -> the staging version, if the run passed
 ```
 
 - **Sync** compares the content hash of the git file with the newest Langfuse version. Same content: nothing happens (or `staging` is put back on it). Different: a new version, labelled `staging`, with commit message `git <content hash> @ <git commit>`. `production` is never touched.
-- **Promote** moves `production`, and only to a version whose content equals the **committed** git file. So production is always something in git, and a rollback is: revert the file, sync, promote. Until Phase H builds the eval gate, it needs `--skip-gate REASON`.
+- **Promote** moves `production`, and only to a version whose content equals the **committed** git file. So production is always something in git, and a rollback is: revert the file, sync, promote. It also needs **eval evidence**: the newest e2e eval run that used exactly that content hash, on the current golden set, must have passed the gate (`eval/thresholds.yaml`, `src/eval/gate.py`). `--skip-gate REASON` is an explicit, logged override. A judge prompt is evaluated with `src.eval.run --judge-label staging`, since judges otherwise always run on `production`.
 - **`PromptRegistry.get(name)`** serves `production` from Langfuse (the SDK caches it for 60 s and serves the stale copy if a refresh fails). When Langfuse can't serve it, the registry uses the git copy, and the result says so: `source` is `langfuse`, `local-fallback` (with the reason), or `local` (Langfuse off), plus the content hash. Phase G stores this in every trace.
 - **Drift check** (`check_langfuse`, and the API at startup in Phase G): per prompt, `in-sync` (production = git), `awaiting-promotion` (staging = git), `not-synced` (run sync), or `unreachable`.
 
@@ -385,4 +392,4 @@ uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # produc
 - **ClickHouse system logs**: 503 MB was written in the first 30 minutes, which includes the migrations, so the idle rate is not measured yet. Check the volume size after a few days with `docker system df -v`. A config file mounted into `/etc/clickhouse-server/config.d/` can disable or shorten (TTL) `query_log`, `metric_log`, `trace_log`, etc. Not done yet.
 - web and worker have no healthcheck in compose. `/api/public/health` (web) and the worker's internal port 3030 could be used.
 - SDK media uploads don't work, because MinIO has no host port. Text-only tracing doesn't need them.
-- All five prompts were promoted to `production` at the end of Phase F with `--skip-gate`; from Phase H on, promotion needs a passing eval run.
+- All five prompts were promoted to `production` at the end of Phase F with `--skip-gate`; from Phase H on, promotion needs a passing e2e eval run of that exact content (`--skip-gate` remains as a logged override).

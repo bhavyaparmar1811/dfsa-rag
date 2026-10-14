@@ -2,12 +2,17 @@
 
 The version (default: the one labelled `staging`) must have exactly the content
 of the committed git file, so production is always something in git. It also
-has to pass the eval gate (Phase H: the last eval run of that version against
-eval/thresholds.yaml). Until the gate exists, a promotion needs --skip-gate with
-a reason, which is printed so it ends up in the terminal log.
+has to pass the eval gate: the newest e2e eval run that used exactly this
+content, on the current golden set, must have passed eval/thresholds.yaml
+(src/eval/gate.py). --skip-gate REASON overrides it; the reason is printed so it
+ends up in the terminal log.
 
-    uv run python -m scripts.promote_prompt answer --skip-gate "first version, no eval yet"
-    uv run python -m scripts.promote_prompt answer --version 3 --skip-gate "..."
+    uv run python -m src.eval.run --label staging      # the e2e run the gate looks for
+    uv run python -m scripts.promote_prompt answer
+    uv run python -m scripts.promote_prompt answer --version 3
+    uv run python -m scripts.promote_prompt answer --skip-gate "hotfix, eval to follow"
+
+Judge prompts are graded with `--judge-label staging` on the eval run.
 """
 
 import argparse
@@ -15,10 +20,13 @@ import subprocess
 import sys
 
 from src.config.settings import LangfuseSettings, PathSettings
+from src.eval.gate import promotion_evidence
+from src.eval.golden import load_golden
 from src.observability.langfuse import make_langfuse
 from src.prompts.files import load_prompts
 from src.prompts.registry import PRODUCTION, fetch_version
 from src.prompts.sync import PromotionError, check_promotable, promote
+from src.storage.db import get_engine
 
 
 def committed(paths: PathSettings, name: str) -> bool:
@@ -45,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-gate",
         metavar="REASON",
-        help="promote without the eval gate (required until Phase H builds it)",
+        help="promote without a passing eval run (an explicit, logged override)",
     )
     args = parser.parse_args(argv)
 
@@ -68,10 +76,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAIL: {e}")
         return 1
 
-    if not args.skip_gate:
-        print("FAIL: the eval gate is not built yet (Phase H). Use --skip-gate REASON.")
-        return 1
-    print(f"GATE SKIPPED: {args.skip_gate}")
+    if args.skip_gate:
+        print(f"GATE SKIPPED: {args.skip_gate}")
+    else:
+        evidence = promotion_evidence(get_engine(), args.name, target.hash, load_golden().hash)
+        if not evidence.ok:
+            print(f"FAIL: eval gate: {evidence.reason}")
+            return 1
+        print(f"GATE PASSED: {evidence.reason}")
 
     current = fetch_version(client, args.name, PRODUCTION)
     if current and current.version == target.version:

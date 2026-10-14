@@ -17,6 +17,7 @@ data/qdrant/
 data/parsed/
 data/processed/
 data/cache/
+data/eval/reports/
 
 # --- Secrets ---
 .env

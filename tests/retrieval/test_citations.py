@@ -28,6 +28,10 @@ def parser():
         ("Markets Law Article 2", ["Markets Law Art. 2"]),
         ("the Law Regulating Islamic Financial Business, Article 2",
          ["Law Regulating Islamic Financial Business Art. 2"]),
+        ("Rule 1.2.1 of PIB", ["PIB 1.2.1"]),  # another module: kept, then unresolved
+        # Prose, not provisions (a false "Rules 7" refused a correct answer, eval run #13):
+        ("the relevant fee referred to in Chapter 7 of the Rules", []),
+        ("section 3.3 of the Rules", []),
         ("Do we need a client agreement with a Market Counterparty?", []),
         ("Is a DFSA 2024 notice relevant?", []),
     ],
