@@ -4,9 +4,6 @@
 
 A production-style retrieval-augmented generation (RAG) system, built end to end: structure-aware PDF ingestion, hybrid search with cross-encoder reranking, grounded generation with a citation validator, a calibrated refusal gate, conversation memory with query rewriting, a FastAPI service, full tracing and cost tracking, and an evaluation suite whose results gate every prompt release.
 
-> **Status:** backend complete (ingestion → retrieval → generation → chat API → evaluation and release gate). A web UI is next.
->
-> Portfolio project 1 of 3: production RAG. Next come a tool-calling agent and a multi-agent system.
 
 ---
 
