@@ -2,7 +2,9 @@
 
 **Ask a plain-language question about the Dubai Financial Services Authority (DFSA) Rulebook and the DIFC Laws, and get an answer grounded in the exact rule, with a rule-level citation. When the corpus doesn't support a confident answer, it says so instead of guessing.**
 
-A production-style retrieval-augmented generation (RAG) system, built end to end: structure-aware PDF ingestion, hybrid search with cross-encoder reranking, grounded generation with a citation validator, a calibrated refusal gate, conversation memory with query rewriting, a FastAPI service, full tracing and cost tracking, and an evaluation suite whose results gate every prompt release.
+A production-style retrieval-augmented generation (RAG) system, built end to end: structure-aware PDF ingestion, hybrid search with cross-encoder reranking, grounded generation with a citation validator, a calibrated refusal gate, conversation memory with query rewriting, an answer cache that was measured before it was trusted, a FastAPI service, full tracing and cost tracking, and an evaluation suite whose results gate every prompt release.
+
+**Read more:** [architecture](docs/architecture.md) · [case study](docs/WRITEUP.md) · [build log](docs/ROADMAP.MD)
 
 
 ---
@@ -68,6 +70,11 @@ The best reranker score for "What is the VAT rate in the UAE?" is 0.003, against
   - Every request is one Langfuse trace (rewrite → retrieve → embed → answer → generation → citation check), linked to the prompt versions it used.
   - A slim audit row in SQLite ties each stored answer to its retrieved chunks, scores, tokens, cost and latency.
 - **Idempotent ingestion.** Per-chunk content hashes mean only changed chunks are re-embedded: an unchanged re-run costs $0.00. The index plan is diffed against Qdrant's own points, so crashes and lost collections repair themselves.
+- **An answer cache, measured before it was trusted.**
+  - A repeated question (including a follow-up whose rewrite matches) is served in about 5 ms at $0, instead of 5–8 s and about $0.02.
+  - Entries are namespaced by corpus, prompt, retrieval config, model and filters, so any change makes old answers unreachable.
+  - A semantic (similarity) layer was built and evaluated on hard negatives, then left off: no threshold separated paraphrases from near-misses with different answers (see [Results](#results)).
+- **Cost reporting across all spend.** `scripts/cost_report.py` splits production, eval and ingestion spend by provider, with refusal and cache-hit rates per day.
 
 ---
 
@@ -108,6 +115,20 @@ All numbers are from the reviewed golden set: 59 conversations, 64 turns, 54 of 
   - an answer about listed *funds* when the question asked about listed *companies*.
 - **An answer costs about $0.013–0.02**, almost all of it GPT-4o input tokens. Embedding the whole corpus cost **$0.012**.
 
+### The answer cache: why it matches exact repeats only
+
+A semantic cache serves a stored answer when a new question's embedding is close enough to a cached one. In compliance work, a near-identical question can have the opposite answer. The cache eval (`src/eval/cache_eval.py`) measured this on 32 paraphrases and 32 hard negatives drafted from the golden set:
+
+| Similarity threshold | Similarity only: wrong answers served | Paraphrases served |
+|---|---|---|
+| 0.80 (LiteLLM's documented example) | 17 / 32 | 100% |
+| 0.90 (RedisVL's default distance of 0.1) | 6 / 32 | 75% |
+| 0.95 | 4 / 32 | 22% |
+
+- **Guards help, but can't close the gap.** The guards (the same provisions, Defined Terms and numbers) stop 17 of the 32 negatives, but not those where the decisive word is ordinary. "Minimum margin for a CFD on a **major** currency pair" vs "… a **minor** currency pair" scores **0.978**, while real paraphrases score 0.83–0.98.
+- **No safe threshold exists:** any threshold that serves no wrong answer serves no paraphrase.
+- **The cache matches exact repeats only.** It still catches follow-ups whose rewrite matches a cached question, which in the live check cut such a turn from about 5 s to 1.5 s. The semantic layer and its eval stay in the code, gated at 0 false hits.
+
 ---
 
 ## Architecture
@@ -127,8 +148,10 @@ flowchart LR
     subgraph Query["Query path (FastAPI)"]
         U[Question + conversation id] --> H[History from SQLite<br/>last 6 messages]
         H --> R[Rewrite follow-ups<br/>GPT-4o]
-        R --> CI[Exact citations<br/>via SQLite]
-        R --> HY[Hybrid search<br/>dense + BM25, RRF]
+        R --> AC{Answer cache:<br/>same question,<br/>same namespace?}
+        AC -- hit --> A
+        AC -- miss --> CI[Exact citations<br/>via SQLite]
+        AC -- miss --> HY[Hybrid search<br/>dense + BM25, RRF]
         CI --> RR[Cross-encoder rerank<br/>bge-reranker-v2-m3]
         HY --> RR
         RR --> G{Confidence ≥ 0.40?}
@@ -148,7 +171,7 @@ flowchart LR
 ```
 
 **Responsibilities:**
-- **SQLite** holds every chunk, including the ones never embedded (section parents, split rules, deleted provisions). It also holds the cross-references and Defined Terms, conversations, request traces and eval runs.
+- **SQLite** holds every chunk, including the ones never embedded (section parents, split rules, deleted provisions). It also holds the cross-references and Defined Terms, conversations, request traces, eval runs and cached answers.
 - **Qdrant** holds only the embedded chunks. A point's id is its SQLite row id.
 - **Langfuse** (self-hosted) is where traces are viewed. It also stores prompt versions and labels, and the golden set as a dataset.
 
@@ -164,6 +187,7 @@ flowchart LR
 | BM25 `avg_len` measured on the corpus (124, not 256) | The default under-penalises long chunks |
 | Reranker pinned to a Hugging Face commit and loaded offline | Eval results can't shift because a model changed upstream |
 | Prompts live in git and are synced to Langfuse; production only from committed files | A rollback is a git revert; an outage falls back to the git copy |
+| Answer cache keyed on the exact question within a namespace of corpus, prompt, config and filters | Measured: similarity can't tell "major" from "minor"; a stale answer can't be served after any change |
 | An outage is an error (503), not a refusal | "No confident answer" would misdescribe a broken dependency |
 
 ---
@@ -181,7 +205,7 @@ flowchart LR
 | PDF parsing | **Docling** |
 | Serving | **FastAPI** |
 | Tracing, prompts, datasets | **Langfuse** v4, self-hosted |
-| Tooling | Python 3.12, uv, pytest (418 tests), Ruff, Docker Compose |
+| Tooling | Python 3.12, uv, pytest (452 tests), Ruff, Docker Compose |
 
 ## Corpus
 
@@ -233,6 +257,14 @@ uv run python -m scripts.ask "what about retail clients?" --conversation <id>   
 uv run python -m scripts.retrieve "customer due diligence" --module AML --json   # retrieval only, every stage
 ```
 
+### Cost and cache
+
+```bash
+uv run python -m scripts.cost_report --days 30     # production, evals, ingestion; by provider; cache hit rate
+uv run python -m scripts.cache stats               # cached answers, hits served
+uv run python -m scripts.cache purge               # drop expired entries and those from an old namespace
+```
+
 ### Run the API
 
 ```bash
@@ -241,12 +273,12 @@ uv run uvicorn src.api.app:app --host 127.0.0.1 --port 8000
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | Database, Qdrant, reranker and Langfuse status (no key needed) |
+| `GET /health` | Database, Qdrant, reranker, cache and Langfuse status (no key needed) |
 | `POST /conversations` | Start a conversation |
-| `POST /conversations/{id}/messages` | Ask; returns the answer, citations, refusal reason, rewritten query, trace id, cost and latency |
+| `POST /conversations/{id}/messages` | Ask; returns the answer, citations, refusal reason, rewritten query, trace id, cost, latency, and whether it was served from the cache (with the trace that first produced it) |
 | `GET /conversations/{id}` | The conversation with its stored messages |
 | `GET /traces/{trace_id}` | The audit record: candidates with scores, prompts used, tokens, cost |
-| `GET /stats/cost` | Total and per-request cost by stage, refusal rate, per day |
+| `GET /stats/cost` | Cost by stage and provider, tokens, refusals by reason, latency, cache hit rate; per day; `?since=&until=` |
 
 Every endpoint except `/health` needs an `X-API-Key` header. The server loads conversation history from SQLite and never trusts history sent by the client.
 
@@ -267,6 +299,7 @@ uv run python -m src.eval.run                     # end to end + LLM judges + ga
 uv run python -m src.eval.calibrate               # refusal threshold from stored confidences
 uv run python -m src.eval.gate --run latest       # re-check a stored run, exit 1 on failure
 uv run python -m scripts.sync_dataset             # golden set -> Langfuse dataset
+uv run python -m src.eval.cache_eval              # answer cache: hard negatives, naive vs guarded sweep, gate
 ```
 
 - **Golden set** (`data/eval/golden.yaml`):
@@ -293,6 +326,7 @@ uv run python -m scripts.sync_dataset             # golden set -> Langfuse datas
 data/manifest.yaml          the corpus: one entry per source PDF, with its hash
 data/eval/golden.yaml       the golden Q&A set
 eval/thresholds.yaml        release-gate floors and ceilings
+data/eval/cache_pairs.yaml  answer-cache calibration pairs (paraphrases and hard negatives)
 prompts/                    answer, refusal, query-rewrite and two judge prompts (versioned)
 infra/docker-compose.yml    Qdrant + Langfuse (web, worker, Postgres, ClickHouse, Redis, MinIO)
 src/
@@ -302,13 +336,13 @@ src/
   storage/       SQLite models, repositories, Alembic migrations, the Qdrant store
   retrieval/     citation router, hybrid search, reranker, context assembly, pipeline
   generation/    the GPT-4o client, the answerer, the citation validator
-  chat/          query rewriting, ChatService (history, one trace per turn)
+  chat/          query rewriting, the answer cache, ChatService (history, one trace per turn)
   prompts/       prompt files, Langfuse sync, the registry with git fallback
   eval/          golden set, metrics, judges, runner, calibration, gate, dataset
   api/           FastAPI app and schemas
-scripts/                    command-line tools (ask, retrieve, inspect_store, sync/promote prompts, ...)
-tests/                      418 tests: offline fakes, plus `-m corpus` tests against the live index
-docs/                       ROADMAP.MD (build log and decisions), langfuse-setup.md
+scripts/                    command-line tools (ask, retrieve, cost_report, cache, inspect_store, sync/promote prompts, ...)
+tests/                      452 tests: offline fakes, plus `-m corpus` tests against the live index
+docs/                       architecture.md, WRITEUP.md (case study), ROADMAP.MD (build log), langfuse-setup.md
 ```
 
 ## Limitations
@@ -320,12 +354,14 @@ docs/                       ROADMAP.MD (build log and decisions), langfuse-setup
   - the listed-company inside-information rule (MKT 4.2.1) is outranked by the listed-fund rule (MKT 6.5).
 - **Follow-up rewrites vary between runs**, even at temperature 0. This is the main source of run-to-run noise in multi-turn evals.
 - **Corpus updates are manual:** re-download, then re-run. The hash-based ingest re-embeds only what changed.
+- **The answer cache only catches exact repeats.** Its calibration pairs were also drafted by an LLM from the golden set.
 
 ## Roadmap
 
 - [x] Ingestion, storage, hybrid retrieval and reranking, grounded generation, chat API, tracing, evaluation and release gate
+- [x] Cost reporting across all spend; an answer cache with a tracked hit rate (exact repeats, by measurement)
 - [ ] Web UI: chat with inline citations, rule viewer, trace inspector
-- [ ] Cost dashboard; semantic cache with a tracked hit rate
+- [ ] An equivalence check (LLM or cross-encoder) that could make semantic cache hits safe
 - [ ] VARA (Dubai's virtual-asset regulator) as a second regulator, filterable per question
 
 The full build log, with the findings and decisions behind each phase, is in [`docs/ROADMAP.MD`](docs/ROADMAP.MD).

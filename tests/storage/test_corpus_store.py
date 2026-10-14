@@ -15,12 +15,19 @@ import pytest
 from qdrant_client import models
 from sqlalchemy import func, select
 
-from src.config.settings import ChunkingSettings, EmbeddingSettings, PathSettings, QdrantSettings
+from src.config.settings import (
+    CacheSettings,
+    ChunkingSettings,
+    EmbeddingSettings,
+    PathSettings,
+    QdrantSettings,
+)
 from src.embeddings.sparse import SparseEncoder
 from src.ingestion.chunk_corpus import chunk_document, rulebook_codes, supported
 from src.ingestion.ingest import Index, ingest
 from src.ingestion.manifest import load_manifest
 from src.ingestion.reconcile import reconcile
+from src.storage.cache_index import CacheIndex
 from src.storage.db import get_engine, session_scope
 from src.storage.models import ChunkRow, Document
 from src.storage.qdrant_store import BOOL_FIELDS, KEYWORD_FIELDS, SPARSE, QdrantStore
@@ -156,3 +163,14 @@ def test_a_dry_run_reingest_would_change_nothing(store, engine, emb):
     )
     for d in result.docs:
         assert (d.plan.to_embed, d.plan.payload_only, d.plan.stale_ids) == ([], [], []), d.doc_id
+
+
+def test_the_cache_collection_matches_the_embedding_model(store, emb):
+    """Read-only: checked only once the API (or scripts/cache.py) has created it."""
+    index = CacheIndex.from_settings(CacheSettings(), emb, client=store.client)
+    if not store.client.collection_exists(index.collection):
+        pytest.skip(f"Cache collection {index.collection} not created yet")
+    index.check()  # raises EmbeddingModelMismatch on another model
+    info = store.client.get_collection(index.collection)
+    assert info.config.params.vectors["dense"].size == emb.dimensions
+    assert set(info.payload_schema) == {"namespace", "expires_at"}

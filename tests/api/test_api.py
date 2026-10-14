@@ -64,6 +64,17 @@ def test_a_conversation_with_a_follow_up(client_for):
 
         stats = client.get("/stats/cost", headers=KEY).json()
         assert stats["requests"] == 2 and stats["cost_usd"]["rewrite"] > 0
+        assert stats["cost_by_provider_usd"]["azure_generation"] > 0
+
+        today = stats["by_day"][0]["day"]
+
+        def window(query: str):
+            return client.get(f"/stats/cost?{query}", headers=KEY)
+
+        assert window(f"since={today}&until={today}").json()["requests"] == 2
+        assert window("since=2000-01-01&until=2000-01-31").json()["requests"] == 0
+        assert window(f"since={today}&until=2000-01-01").status_code == 422
+        assert window("since=yesterday").status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -104,5 +115,6 @@ def test_health_reports_each_dependency(client_for):
     with client_for() as client:
         body = client.get("/health").json()
         assert body["status"] == "ok"
-        assert set(body["checks"]) == {"database", "qdrant", "reranker", "langfuse"}
+        assert set(body["checks"]) == {"database", "qdrant", "reranker", "cache", "langfuse"}
         assert body["checks"]["langfuse"] == {"ok": True, "enabled": False}
+        assert body["checks"]["cache"] == {"ok": True, "enabled": False}  # no cache built

@@ -273,6 +273,34 @@ class ChatSettings(BaseSettings):
     max_message_chars: int = 2000
 
 
+class CacheSettings(BaseSettings):
+    """The semantic answer cache (src/chat/cache.py).
+
+    Answered first turns are cached under a namespace that hashes everything that
+    shapes an answer (corpus, retrieval config, answer prompt, model, filters), so
+    any change makes old entries unreachable. A semantic hit also has to name the
+    same provisions, Defined Terms and numbers as the cached question.
+    """
+
+    model_config = _section("CACHE_")
+
+    enabled: bool = True
+    # Cosine similarity a cached question needs, on top of the guards. None: exact
+    # repeats only (the normalised question). Decided: None. src/eval/cache_eval.py
+    # found no threshold with 0 false hits that serves any paraphrase (a hard negative
+    # scores 0.978, paraphrases 0.83-0.98); a value here must pass that eval's gate.
+    similarity_threshold: float | None = None
+    ttl_days: int = 30
+    top_k: int = 3  # semantic candidates checked against the guards
+    collection_prefix: str = "dfsa_cache"
+
+
+def cache_collection_name(cache: CacheSettings, embedding: EmbeddingSettings) -> str:
+    """e.g. 'dfsa_cache__text-embedding-3-small-1536': tied to the embedding model,
+    like the chunk collection."""
+    return f"{cache.collection_prefix}__{embedding.fingerprint}"
+
+
 class ApiSettings(BaseSettings):
     """FastAPI. Every endpoint except /health needs the X-API-Key header."""
 
@@ -296,6 +324,8 @@ class PathSettings(BaseModel):
     # Phase H: the golden set (committed), the release-gate limits (committed) and
     # the run reports (gitignored).
     golden_set: Path = PROJECT_ROOT / "data" / "eval" / "golden.yaml"
+    # Phase I: the semantic cache's calibration pairs (committed).
+    cache_pairs: Path = PROJECT_ROOT / "data" / "eval" / "cache_pairs.yaml"
     eval_thresholds: Path = PROJECT_ROOT / "eval" / "thresholds.yaml"
     eval_reports: Path = PROJECT_ROOT / "data" / "eval" / "reports"
 

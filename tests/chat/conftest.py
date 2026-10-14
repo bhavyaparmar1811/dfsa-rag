@@ -34,14 +34,16 @@ class FakeRetriever:
 
     def __init__(self, error: Exception | None = None, **kwargs):
         self.questions: list[str] = []
+        self.embeddings: list = []  # the query embedding each call was handed, if any
         self.error = error
         self.kwargs = kwargs
         self.citations = CitationRouter(None, None, CODES, LAWS)
         self.reranker = None
         self.searcher = SimpleNamespace(store=SimpleNamespace(collection="test", count=lambda: 5))
 
-    def retrieve(self, question, filters=None):
+    def retrieve(self, question, filters=None, query_embedding=None):
         self.questions.append(question)
+        self.embeddings.append(query_embedding)
         if self.error:
             raise self.error
         return retrieval(question=question, **self.kwargs)

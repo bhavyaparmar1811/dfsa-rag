@@ -43,3 +43,17 @@ ceilings:          # metric <= limit
 # A floor metric may not drop more than this share below the last passing run of
 # `config` on the same golden set (relative: 0.03 = 3%).
 max_regression: 0.03
+
+# The semantic cache (Phase I): src/eval/cache_eval.py over data/eval/cache_pairs.yaml,
+# at the configured CACHE_SIMILARITY_THRESHOLD. Serving one wrong answer to a hard
+# negative fails the release.
+#
+# Decided 2026-10-14 (cache eval run #22, draft pairs): EXACT REPEATS ONLY. No
+# similarity threshold separates paraphrases (cosine 0.83-0.98) from hard negatives
+# the guards can't catch ("major" vs "minor" currency pair: 0.978), so the threshold
+# stays unset and paraphrases are not served by design. Raise the floor below if a
+# semantic threshold (or an equivalence check) is ever enabled.
+cache:
+  min_pairs: 50
+  max_false_hits: 0
+  min_positive_hit_rate: 0.0    # exact-only: 0 of 32 paraphrases served [run #22]

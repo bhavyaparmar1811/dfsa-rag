@@ -1,15 +1,27 @@
+from datetime import date, datetime
+
 from sqlalchemy import func, select
 
 from src.ingestion.diff import diff_chunks
 from src.ingestion.ids import chunk_id
 from src.ingestion.models import ChunkType
 from src.storage.db import session_scope
-from src.storage.models import ChunkRef, ChunkRow, ChunkTerm, Document, IngestionRun
+from src.storage.models import (
+    ChunkRef,
+    ChunkRow,
+    ChunkTerm,
+    Document,
+    EvalRun,
+    IngestionRun,
+    Trace,
+)
 from src.storage.repositories import (
     ChunkRepository,
     DocumentRepository,
+    EvalRunRepository,
     IngestionRunRepository,
     RunStats,
+    TraceRepository,
 )
 from tests.factories import FINGERPRINT, chunk, entry
 
@@ -153,3 +165,86 @@ def test_ingestion_run_lifecycle(engine):
         run = IngestionRunRepository(s).latest()
         assert (run.id, run.status, run.chunks_new, run.error) == (run_id, "ok", 7, None)
         assert run.finished_at is not None and run.sparse_model == "Qdrant/bm25"
+
+
+# --- cost summaries -----------------------------------------------------------
+
+
+def trace(i: int, day: str, *, refused=None, code=None, status="ok", answer=0.01, total_ms=1000):
+    return Trace(
+        id=f"t{i}", created_at=datetime.fromisoformat(f"{day}T12:00:00"), status=status,
+        original_query="q", refused=refused, refusal_code=code,
+        embed_tokens=10, embed_cost_usd=0.000001, rewrite_input_tokens=100,
+        rewrite_output_tokens=10, rewrite_cost_usd=0.001, answer_input_tokens=5000 if answer else 0,
+        answer_output_tokens=150 if answer else 0, answer_cost_usd=answer,
+        total_cost_usd=0.000001 + 0.001 + answer, latency_ms={"total": total_ms},
+    )  # fmt: skip
+
+
+def seed_traces(engine):
+    with session_scope(engine) as s:
+        repo = TraceRepository(s)
+        repo.add(trace(1, "2026-10-01", refused=False, total_ms=1000))
+        repo.add(trace(2, "2026-10-01", refused=True, code="low_confidence", answer=0.0,
+                       total_ms=2000))  # fmt: skip
+        repo.add(trace(3, "2026-10-02", refused=True, code="citation_check_failed",
+                       total_ms=3000))  # fmt: skip
+        repo.add(trace(4, "2026-10-03", status="error", answer=0.0, total_ms=9000))
+
+
+def test_cost_stats_breaks_down_refusals_providers_and_latency(engine):
+    seed_traces(engine)
+    with session_scope(engine) as s:
+        stats = TraceRepository(s).cost_stats()
+    assert (stats["requests"], stats["refused"], stats["errors"]) == (4, 2, 1)
+    assert stats["refusal_rate"] == round(2 / 3, 4)  # errors are not refusals
+    assert stats["refusals_by_code"] == {"citation_check_failed": 1, "low_confidence": 1}
+    assert stats["gate_refusals"] == 1  # low_confidence never reached the LLM
+    assert stats["cost_by_provider_usd"]["openai_embeddings"] == round(4 * 0.000001, 6)
+    assert stats["cost_by_provider_usd"]["azure_generation"] == round(4 * 0.001 + 0.02, 6)
+    assert stats["tokens"]["answer_input"] == 10000 and stats["tokens"]["embedding"] == 40
+    assert stats["latency_ms"] == {"p50": 2000.0, "p95": 2900.0}  # error turns excluded
+    assert [d["day"] for d in stats["by_day"]] == ["2026-10-01", "2026-10-02", "2026-10-03"]
+    assert stats["by_day"][0]["requests"] == 2 and stats["by_day"][0]["gate_refusals"] == 1
+
+
+def test_cost_stats_window_is_inclusive_utc_days(engine):
+    seed_traces(engine)
+    with session_scope(engine) as s:
+        repo = TraceRepository(s)
+        window = repo.cost_stats(date(2026, 10, 2), date(2026, 10, 3))
+        empty = repo.cost_stats(date(2026, 11, 1))
+    assert window["requests"] == 2 and (window["since"], window["until"]) == (
+        "2026-10-02",
+        "2026-10-03",
+    )
+    assert empty["requests"] == 0 and empty["cost_per_request_usd"] is None
+    assert empty["latency_ms"] == {"p50": None, "p95": None} and empty["by_day"] == []
+
+
+def test_eval_and_ingestion_cost_summaries(engine):
+    with session_scope(engine) as s:
+        for kind, cost, day in (
+            ("e2e", {"embed": 0.0001, "answer": 0.8, "judge": 0.7, "total": 1.5001}, "2026-10-01"),
+            ("e2e", {"embed": 0.0001, "answer": 0.9, "judge": 0.8, "total": 1.7001}, "2026-10-02"),
+            ("retrieval", {"embed": 0.00002, "total": 0.00002}, "2026-10-02"),
+        ):
+            at = datetime.fromisoformat(f"{day}T09:00:00")
+            s.add(EvalRun(kind=kind, config_name="hybrid_rerank", golden_hash="g", n_turns=64,
+                          cost_usd=cost, created_at=at))  # fmt: skip
+        runs = IngestionRunRepository(s)
+        run_id = runs.start("fp", "Qdrant/bm25")
+        runs.finish(run_id, RunStats(embed_tokens=1000, embed_cost_usd=0.00002))
+        failed = runs.start("fp", "Qdrant/bm25")
+        runs.finish(failed, RunStats(), error="boom")
+
+    with session_scope(engine) as s:
+        evals = EvalRunRepository(s).cost_summary()
+        later = EvalRunRepository(s).cost_summary(since=date(2026, 10, 2))
+        ingestion = IngestionRunRepository(s).cost_summary()
+    e2e = evals["by_kind"]["e2e"]
+    assert (e2e["runs"], e2e["turns"]) == (2, 128)
+    assert e2e["cost_usd"] == {"answer": 1.7, "embed": 0.0002, "judge": 1.5, "total": 3.2002}
+    assert evals["cost_usd"] == round(3.2002 + 0.00002, 6)
+    assert later["by_kind"]["e2e"]["runs"] == 1 and "retrieval" in later["by_kind"]
+    assert ingestion == {"runs": 2, "failed": 1, "embed_tokens": 1000, "cost_usd": 0.00002}

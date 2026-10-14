@@ -4,8 +4,8 @@
     POST /conversations/{id}/messages    one turn: answer or refusal, with citations
     GET  /conversations/{id}             the conversation, every turn with its trace id
     GET  /traces/{id}                    the stored audit record of one turn
-    GET  /stats/cost                     requests, refusal rate, $ by stage, by day
-    GET  /health                         database, Qdrant, reranker, Langfuse (no key needed)
+    GET  /stats/cost[?since=&until=]     requests, refusals, tokens, $ by stage and provider
+    GET  /health                         database, Qdrant, reranker, cache, Langfuse (no key)
 
 Every endpoint but /health needs `X-API-Key: <API_KEY>`. At startup: the database
 must be at the Alembic head, the reranker is loaded once, the index is checked
@@ -22,12 +22,14 @@ import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import date
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.api.schemas import (
+    CacheInfo,
     Citation,
     ConversationDetail,
     ConversationOut,
@@ -131,6 +133,8 @@ def create_app(
             trace_url=turn.trace_url,
             cost_usd=round(turn.cost_usd, 6),
             latency_ms=turn.latency_ms,
+            cached=turn.cached,
+            cache=_cache_info(turn.cache.hit) if turn.cached else None,
         )
 
     @app.get("/conversations/{conversation_id}", dependencies=keyed)
@@ -150,10 +154,22 @@ def create_app(
         return row | {"langfuse_url": trace_url(trace_id)}
 
     @app.get("/stats/cost", dependencies=keyed)
-    def cost_stats(svc: Service) -> dict:
-        return svc.cost_stats()
+    def cost_stats(svc: Service, since: date | None = None, until: date | None = None) -> dict:
+        """Production requests only (eval runs never write traces); UTC days, inclusive."""
+        if since and until and since > until:
+            raise HTTPException(status_code=422, detail="since is after until")
+        return svc.cost_stats(since, until)
 
     return app
+
+
+def _cache_info(hit) -> CacheInfo:
+    return CacheInfo(
+        kind=hit.kind,
+        similarity=None if hit.similarity is None else round(hit.similarity, 4),
+        entry_id=hit.entry_id,
+        source_trace_id=hit.source_trace_id,
+    )
 
 
 def _message(m: Message) -> MessageOut:

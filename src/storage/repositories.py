@@ -5,9 +5,11 @@ Each repository wraps a `Session` and never commits: the caller decides the
 transaction (`session_scope()`), e.g. one transaction per ingested document.
 """
 
+import hashlib
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import Integer, delete, func, insert, select, update
 from sqlalchemy.orm import Session
@@ -15,7 +17,9 @@ from sqlalchemy.orm import Session
 from src.ingestion.diff import StoredChunk
 from src.ingestion.manifest import ManifestEntry
 from src.ingestion.models import Chunk
+from src.observability.stats import percentile
 from src.storage.models import (
+    CacheEntry,
     ChunkRef,
     ChunkRow,
     ChunkTerm,
@@ -91,6 +95,27 @@ class ChunkRepository:
                 ).order_by(ChunkRow.document_id, ChunkRow.order_idx)
             )
         )  # fmt: skip
+
+    def content_hashes(self, ids: Iterable[str]) -> dict[str, str]:
+        """{chunk id: content_hash} for the ids that exist (the cache checks a cited
+        chunk is still the text it was answered from)."""
+        rows = self.s.execute(
+            select(ChunkRow.id, ChunkRow.content_hash).where(ChunkRow.id.in_(list(ids)))
+        )
+        return dict(rows.all())
+
+    def corpus_hash(self) -> str:
+        """sha256 over every embedded chunk's (key, content_hash): changes whenever an
+        ingest changes searchable text."""
+        digest = hashlib.sha256()
+        rows = self.s.execute(
+            select(ChunkRow.key, ChunkRow.content_hash)
+            .where(ChunkRow.is_embedded.is_(True))
+            .order_by(ChunkRow.key)
+        )
+        for key, content_hash in rows:
+            digest.update(f"{key}|{content_hash}".encode())
+        return digest.hexdigest()
 
     def clear_embedded(self, ids: Iterable[str]) -> None:
         ids = list(ids)
@@ -329,6 +354,26 @@ class IngestionRunRepository:
     def latest(self) -> IngestionRun | None:
         return self.s.scalar(select(IngestionRun).order_by(IngestionRun.id.desc()).limit(1))
 
+    def last_finished_id(self) -> int:
+        """The newest finished run's id (0 if none): cheap to poll for "has the corpus
+        changed?" (a run still in progress counts once it finishes)."""
+        query = select(func.coalesce(func.max(IngestionRun.id), 0)).where(
+            IngestionRun.finished_at.is_not(None)
+        )
+        return self.s.scalar(query)
+
+    def cost_summary(self, since: date | None = None, until: date | None = None) -> dict:
+        """Ingestion runs started in a window of UTC days: runs, embedding tokens and $."""
+        cols = (
+            func.count(),
+            func.coalesce(func.sum((IngestionRun.status == "failed").cast(Integer)), 0),
+            func.coalesce(func.sum(IngestionRun.embed_tokens), 0),
+            func.coalesce(func.sum(IngestionRun.embed_cost_usd), 0.0),
+        )
+        query = _in_window(select(*cols), IngestionRun.started_at, since, until)
+        runs, failed, tokens, cost = self.s.execute(query).one()
+        return {"runs": runs, "failed": failed, "embed_tokens": tokens, "cost_usd": round(cost, 6)}
+
 
 # --- chat ---------------------------------------------------------------------
 
@@ -389,39 +434,189 @@ class TraceRepository:
     def get(self, trace_id: str) -> Trace | None:
         return self.s.get(Trace, trace_id)
 
-    def cost_stats(self) -> dict:
-        """Totals over all requests, and per day: requests, refusals, errors, $ by stage."""
-        cols = (
-            func.count(),
-            func.coalesce(func.sum(Trace.refused.cast(Integer)), 0),
-            func.coalesce(func.sum((Trace.status == "error").cast(Integer)), 0),
-            func.coalesce(func.sum(Trace.embed_cost_usd), 0.0),
-            func.coalesce(func.sum(Trace.rewrite_cost_usd), 0.0),
-            func.coalesce(func.sum(Trace.answer_cost_usd), 0.0),
-            func.coalesce(func.sum(Trace.total_cost_usd), 0.0),
+    def set_cache_entry(self, trace_id: str, entry_id: str) -> None:
+        """The answer of this turn was stored in the cache as `entry_id`."""
+        trace = self.s.get(Trace, trace_id)
+        trace.cache_entry_id = entry_id
+        trace.cache = (trace.cache or {}) | {"stored_entry_id": entry_id}
+
+    def cost_stats(self, since: date | None = None, until: date | None = None) -> dict:
+        """Production requests in a window of UTC days (both inclusive), in total and
+        per day: requests, refusals by code, tokens, $ by stage and by provider, latency."""
+        query = _in_window(select(*_COST_COLUMNS), Trace.created_at, since, until)
+        rows = self.s.execute(query.order_by(Trace.created_at)).all()
+        by_day: dict[str, list] = {}
+        for r in rows:
+            by_day.setdefault(r.created_at.date().isoformat(), []).append(r)
+        return (
+            {"since": _iso(since), "until": _iso(until)}
+            | _trace_summary(rows)
+            | {"by_day": [{"day": d} | _trace_summary(day) for d, day in by_day.items()]}
         )
-        day = func.date(Trace.created_at)
 
-        def row(values) -> dict:
-            n, refused, errors, embed, rewrite, answer, total = values
-            answered = n - errors
-            return {
-                "requests": n,
-                "refused": refused,
-                "errors": errors,
-                "refusal_rate": round(refused / answered, 4) if answered else None,
-                "cost_usd": {
-                    "embedding": round(embed, 6),
-                    "rewrite": round(rewrite, 6),
-                    "answer": round(answer, 6),
-                    "total": round(total, 6),
-                },
-                "cost_per_request_usd": round(total / n, 6) if n else None,
-            }
 
-        totals = row(self.s.execute(select(*cols)).one())
-        by_day = self.s.execute(select(day, *cols).group_by(day).order_by(day)).all()
-        return totals | {"by_day": [{"day": d} | row(rest) for d, *rest in by_day]}
+# Refused by the confidence gate, before any LLM call (src/generation/answer.py).
+GATE_REFUSALS = frozenset({"no_context", "low_confidence"})
+
+# Only the columns the summary needs: the JSON traces of a request are large.
+_COST_COLUMNS = (
+    Trace.created_at,
+    Trace.status,
+    Trace.refused,
+    Trace.refusal_code,
+    Trace.embed_tokens,
+    Trace.embed_cost_usd,
+    Trace.rewrite_input_tokens,
+    Trace.rewrite_output_tokens,
+    Trace.rewrite_cost_usd,
+    Trace.answer_input_tokens,
+    Trace.answer_output_tokens,
+    Trace.answer_cost_usd,
+    Trace.total_cost_usd,
+    Trace.latency_ms,
+    Trace.cache_status,
+    Trace.cache,
+)
+
+
+def _trace_summary(rows) -> dict:
+    n = len(rows)
+    errors = sum(r.status == "error" for r in rows)
+    codes = Counter(r.refusal_code for r in rows if r.refused)
+    refused = sum(codes.values())
+    embed, rewrite, answer, total = (
+        sum(getattr(r, f) for r in rows)
+        for f in ("embed_cost_usd", "rewrite_cost_usd", "answer_cost_usd", "total_cost_usd")
+    )
+    latencies = [r.latency_ms["total"] for r in rows if r.status == "ok" and r.latency_ms]
+    return {
+        "requests": n,
+        "refused": refused,
+        "errors": errors,
+        "refusal_rate": round(refused / (n - errors), 4) if n - errors else None,
+        "refusals_by_code": {str(code): k for code, k in sorted(codes.items(), key=str)},
+        "gate_refusals": sum(codes[c] for c in GATE_REFUSALS),
+        "cost_usd": {
+            "embedding": round(embed, 6),
+            "rewrite": round(rewrite, 6),
+            "answer": round(answer, 6),
+            "total": round(total, 6),
+        },
+        "cost_by_provider_usd": {
+            "openai_embeddings": round(embed, 6),
+            "azure_generation": round(rewrite + answer, 6),
+        },
+        "cost_per_request_usd": round(total / n, 6) if n else None,
+        "tokens": {
+            "embedding": sum(r.embed_tokens for r in rows),
+            "rewrite_input": sum(r.rewrite_input_tokens for r in rows),
+            "rewrite_output": sum(r.rewrite_output_tokens for r in rows),
+            "answer_input": sum(r.answer_input_tokens for r in rows),
+            "answer_output": sum(r.answer_output_tokens for r in rows),
+        },
+        "latency_ms": {
+            "p50": _round(percentile(latencies, 50), 1),
+            "p95": _round(percentile(latencies, 95), 1),
+        },
+        "cache": _cache_summary(rows),
+    }
+
+
+def _cache_summary(rows) -> dict:
+    """Lookups are turns that asked the cache (hit or miss); bypassed turns (staging
+    labels, the cache switched off) and turns from before the cache don't count."""
+    hits = [r for r in rows if r.cache_status == "hit"]
+    lookups = len(hits) + sum(r.cache_status == "miss" for r in rows)
+    latencies = [r.latency_ms["total"] for r in hits if r.latency_ms]
+    return {
+        "lookups": lookups,
+        "hits": len(hits),
+        "exact_hits": sum((r.cache or {}).get("kind") == "exact" for r in hits),
+        "hit_rate": round(len(hits) / lookups, 4) if lookups else None,
+        # what the hits would have cost uncached (the original turns), minus what they cost
+        "saved_usd": round(
+            sum((r.cache or {}).get("source_cost_usd", 0.0) - r.total_cost_usd for r in hits), 6
+        ),
+        "hit_latency_p50_ms": _round(percentile(latencies, 50), 1),
+    }
+
+
+def _in_window(query, column, since: date | None, until: date | None):
+    """Rows from the start of `since` to the end of `until` (UTC days, both inclusive)."""
+    if since is not None:
+        query = query.where(column >= datetime.combine(since, time.min))
+    if until is not None:
+        query = query.where(column < datetime.combine(until + timedelta(days=1), time.min))
+    return query
+
+
+def _iso(day: date | None) -> str | None:
+    return day.isoformat() if day else None
+
+
+def _round(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+# --- semantic cache -------------------------------------------------------------
+
+
+class CacheRepository:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def add(self, entry: CacheEntry) -> CacheEntry:
+        self.s.add(entry)
+        self.s.flush()
+        return entry
+
+    def get(self, entry_id: str) -> CacheEntry | None:
+        return self.s.get(CacheEntry, entry_id)
+
+    def by_hash(self, namespace: str, query_hash: str, now: datetime) -> CacheEntry | None:
+        """The newest unexpired entry for exactly this (normalised) question."""
+        return self.s.scalar(
+            select(CacheEntry)
+            .where(
+                CacheEntry.namespace == namespace,
+                CacheEntry.query_hash == query_hash,
+                CacheEntry.expires_at > now,
+            )
+            .order_by(CacheEntry.created_at.desc())
+            .limit(1)
+        )
+
+    def record_hit(self, entry_id: str, now: datetime) -> None:
+        self.s.execute(
+            update(CacheEntry)
+            .where(CacheEntry.id == entry_id)
+            .values(hit_count=CacheEntry.hit_count + 1, last_hit_at=now)
+        )
+
+    def meta(self) -> list[tuple[str, dict, datetime]]:
+        """(id, components, expires_at) of every entry, for purging stale ones."""
+        query = select(CacheEntry.id, CacheEntry.components, CacheEntry.expires_at)
+        return [tuple(r) for r in self.s.execute(query)]
+
+    def ids(self) -> set[str]:
+        return set(self.s.scalars(select(CacheEntry.id)))
+
+    def delete(self, ids: Iterable[str]) -> int:
+        ids = list(ids)
+        if ids:
+            self.s.execute(delete(CacheEntry).where(CacheEntry.id.in_(ids)))
+        return len(ids)
+
+    def stats(self, now: datetime) -> dict:
+        n, live, hits, namespaces = self.s.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum((CacheEntry.expires_at > now).cast(Integer)), 0),
+                func.coalesce(func.sum(CacheEntry.hit_count), 0),
+                func.count(func.distinct(CacheEntry.namespace)),
+            )
+        ).one()
+        return {"entries": n, "unexpired": live, "hits_served": hits, "namespaces": namespaces}
 
 
 # --- evals --------------------------------------------------------------------
@@ -504,3 +699,26 @@ class EvalRunRepository:
             for run in self.s.scalars(query.order_by(EvalRun.id.desc()))
             if any(p.get("name") == name and p.get("hash") == content_hash for p in run.prompts)
         ]
+
+    def cost_summary(self, since: date | None = None, until: date | None = None) -> dict:
+        """Eval runs started in a window of UTC days, by kind: runs, turns, $ per stage."""
+        query = select(EvalRun.kind, EvalRun.n_turns, EvalRun.cost_usd)
+        kinds: dict[str, dict] = {}
+        for kind, turns, cost in self.s.execute(
+            _in_window(query, EvalRun.created_at, since, until).order_by(EvalRun.id)
+        ):
+            k = kinds.setdefault(kind, {"runs": 0, "turns": 0, "stages": Counter()})
+            k["runs"] += 1
+            k["turns"] += turns or 0
+            k["stages"].update({st: v for st, v in (cost or {}).items() if st != "total"})
+        by_kind = {
+            kind: {
+                "runs": k["runs"],
+                "turns": k["turns"],
+                "cost_usd": {st: round(v, 6) for st, v in sorted(k["stages"].items())}
+                | {"total": round(sum(k["stages"].values()), 6)},
+            }
+            for kind, k in sorted(kinds.items())
+        }
+        total = sum(k["cost_usd"]["total"] for k in by_kind.values())
+        return {"by_kind": by_kind, "cost_usd": round(total, 6)}

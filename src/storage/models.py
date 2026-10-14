@@ -1,4 +1,5 @@
-"""SQLite tables: the ingested corpus (migration 0001), the chat (0002) and evals (0003).
+"""SQLite tables: the ingested corpus (migration 0001), the chat (0002), evals (0003)
+and the semantic answer cache (0004).
 
     documents 1 ──< chunks >── chunk_refs     what each chunk references
                        └────── chunk_terms    which Defined Terms it uses
@@ -11,6 +12,9 @@
     eval_runs 1 ──< eval_results              one row per eval run (config, prompts,
                                               golden-set hash, metrics, gate) and per
                                               golden turn (ranking, answer, judges)
+
+    cache_entries                             one cached answer (src/chat/cache.py); its id
+                                              is its point id in the Qdrant cache collection
 
 SQLite is the system of record: it holds every chunk, including the ones that
 are never embedded (section parents, rules that were split into parts, deleted
@@ -238,6 +242,42 @@ class Trace(Base):
     answer_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)  # per stage + total
+    # semantic cache (0004): hit | miss | bypass, or None (a request from before the cache)
+    cache_status: Mapped[str | None] = mapped_column(String, index=True)
+    cache_entry_id: Mapped[str | None] = mapped_column(String)  # the entry served or stored
+    cache_similarity: Mapped[float | None] = mapped_column(Float)  # None for an exact repeat
+    cache: Mapped[dict | None] = mapped_column(JSON)  # CacheLookup.trace()
+
+
+class CacheEntry(Base):
+    """One cached answer, served again only inside its namespace (src/chat/cache.py).
+
+    The namespace is a hash of everything that shapes an answer (corpus, retrieval
+    config, answer prompt, model, filters), stored in `components` too. The entry
+    points back at the trace of the turn that produced it, so a cached answer can
+    always be audited to its original retrieval."""
+
+    __tablename__ = "cache_entries"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # uuid4 = Qdrant point id
+    namespace: Mapped[str] = mapped_column(String(64), index=True)
+    components: Mapped[dict] = mapped_column(JSON)
+    question: Mapped[str] = mapped_column(Text)  # as the user asked it
+    query: Mapped[str] = mapped_column(Text)  # the standalone question: the cache key
+    query_hash: Mapped[str] = mapped_column(String(64), index=True)  # of the normalised query
+    # Guards: a semantic hit must name the same provisions, Defined Terms and numbers.
+    citations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    terms: Mapped[list[str]] = mapped_column(JSON, default=list)
+    numbers: Mapped[list[str]] = mapped_column(JSON, default=list)
+    answer: Mapped[str] = mapped_column(Text)
+    guidance_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    cited: Mapped[list[dict]] = mapped_column(JSON, default=list)  # CitedProvision + content_hash
+    source_trace_id: Mapped[str] = mapped_column(String, index=True)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)  # what the original turn cost
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class EvalRun(Base):

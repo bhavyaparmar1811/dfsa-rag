@@ -19,8 +19,8 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | E | Langfuse: self-hosted tracing and prompt store | ✅ |
 | F | Generation, grounding and refusal | ✅ |
 | G | Chat history, query rewriting, FastAPI | ✅ |
-| H | Evaluation: golden set, metrics, LLM judges, release gate | 🔄 |
-| I | Cost reporting, docs, polish | ⬜ |
+| H | Evaluation: golden set, metrics, LLM judges, release gate | ✅ |
+| I | Cost reporting, answer cache, docs | ✅ |
 | J | VARA as a second regulator | ⏸ |
 
 ---
@@ -451,8 +451,8 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
   - `/stats/cost`: 4 requests, $0.0695 in total, $0.0174 per request (answer $0.0679, rewrite $0.0017, embeddings $0.000001).
 - `pytest` (322 offline + 36 corpus) and `ruff check` are green.
 
-## Phase H: Evaluation 🔄
-**Flow:** `golden.yaml → (rewrite) → retrieve → [answer → judges] → eval_results per turn → eval_runs summary → gate`. Built, tested, golden set approved, refusal threshold set, baseline gated (run #13). The baseline's findings and a promotion through the gate (Checkpoint 3b) remain.
+## Phase H: Evaluation ✅
+**Flow:** `golden.yaml → (rewrite) → retrieve → [answer → judges] → eval_results per turn → eval_runs summary → gate`. Built, tested, golden set approved, refusal threshold set, baseline gated (run #13), fixes re-baselined (run #14), and the first promotion through the gate done.
 
 | Step | What | Files |
 |---|---|---|
@@ -468,7 +468,7 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 | ✅ | **Checkpoint 2:** reviewed-set retrieval run #12 (hybrid_rerank: r@1 0.778, r@6 0.944, r@40 0.982, MRR 0.863, nDCG@6 0.831, ctx recall 0.982); **`refusal_threshold = 0.40`** | `src/config/settings.py` |
 | ✅ | **Checkpoint 3a:** baseline e2e run #13 ($1.68, 64 turns, production prompts); floors set from it; the gate passes, so #13 is the regression baseline | `eval/thresholds.yaml` |
 | ✅ | **Checkpoint 3b:** fixed the citation-parser bug and the relevance judge; e2e run #14 with `--judge-label staging` passed the gate (now the regression baseline); relevance floor 4.80 added | `src/retrieval/citations.py`, `prompts/judge-relevance.yaml`, `eval/thresholds.yaml` |
-| ⬜ | Promote `judge-relevance` v2 through the gate, after the commit (`promote_prompt` requires a committed prompt file) | |
+| ✅ | Promoted `judge-relevance` v2 through the gate, no override: "GATE PASSED: eval run #14", production v1 → v2 (2026-10-14) | `scripts/promote_prompt.py` |
 
 **Baseline, e2e run #13** (2026-10-14, 59 reviewed items, 64 turns, `refusal_threshold` 0.40, production prompts):
 
@@ -556,12 +556,69 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - About 60 questions make the calibration coarse, and it is calibrated on the set it is evaluated on.
 - The golden set was drafted by Claude from the corpus and approved by the owner as a whole, not edited item by item.
 
-## Phase I: Cost, docs, polish ⬜
-- Cost report: total, per query, embedding vs generation, refusal rate over time (`scripts/cost_report.py` and `/stats/cost`).
-- README quickstart: compose up → migrate → ingest → ask → eval.
-- `docs/architecture.md`.
-- Update CLAUDE.md: Langfuse in the stack, the chunk types, SQLite vs Qdrant responsibilities, the prompt workflow.
-- Portfolio write-up: the Docling findings, the evaluation comparison table, the source typos found.
+## Phase I: Cost reporting, answer cache, docs ✅
+**Goal:** report all spend; cache answers without ever serving a wrong one; the docs a reader needs.
+
+| Step | What | Files |
+|---|---|---|
+| ✅ I0 | Phase H closed: `judge-relevance` v2 promoted through the gate (run #14), no `--skip-gate` | |
+| ✅ I1 | **Cost report over all spend.** `TraceRepository.cost_stats(since, until)`: tokens per stage, $ by provider (OpenAI embeddings vs Azure GPT-4o), refusals by reason with gate refusals apart, latency p50/p95, cache hits and savings, per day. `EvalRunRepository.cost_summary` (by kind and stage), `IngestionRunRepository.cost_summary`. `scripts/cost_report.py` prints Markdown (or `--json`) for production, evals, ingestion and a total; `/stats/cost?since=&until=` stays production-only. `percentile` moved to `src/observability/stats.py` (storage can't import eval) | `src/storage/repositories.py`, `scripts/cost_report.py`, `src/api/app.py` |
+| ✅ I2 | **Answer cache.** Alembic 0004: `cache_entries` and `traces.cache_status / cache_entry_id / cache_similarity / cache`. `CacheSettings` (`CACHE_`), the Qdrant cache collection (`dfsa_cache__<fingerprint>`, checked against the embedding model like the chunk collection), `CacheRepository`, `SemanticCache` (namespace, exact + semantic lookup, guards, verification, store, purge), wired into `ChatService` after the rewrite; on a miss the lookup's embedding is handed to retrieval, so a question is embedded once. API: `cached` and `cache` (kind, similarity, entry, source trace); `/health` reports it. `scripts/cache.py stats | purge | clear` | `src/chat/cache.py`, `src/storage/cache_index.py`, `src/storage/migrations/versions/0004_semantic_cache.py`, `src/chat/service.py`, `scripts/cache.py` |
+| ✅ I3 | **Cache calibration.** `data/eval/cache_pairs.yaml`: 32 paraphrases and 32 hard negatives drafted from the golden set (`reviewed: false`). `src/eval/cache_eval.py`: embeds the pairs, applies the guards with the cache's own function, sweeps thresholds with and without guards, recommends one, stores `eval_runs` kind `cache`. The gate checks cache runs against a `cache` block in `eval/thresholds.yaml` (0 false hits) and that the run evaluated the configured threshold. **Decision: exact repeats only** | `src/eval/cache_eval.py`, `src/eval/gate.py`, `eval/thresholds.yaml` |
+| ✅ I4 | Live checkpoint through the API (below) | |
+| ✅ I5 | `docs/architecture.md`, `docs/WRITEUP.md` (case study), CLAUDE.md (Langfuse, storage responsibilities, chunk types, prompt workflow, cache rules, repo layout), README (cache, cost report, API fields, results) | `docs/`, `CLAUDE.md`, `README.md` |
+
+**Cache design:**
+- **Key:** the standalone (rewritten) question, normalised (case, spacing, closing punctuation), hashed.
+- **Namespace:** sha256 of the corpus hash (every embedded chunk's content hash, recomputed when a new ingestion run finishes), the embedding and BM25 fingerprints, `Retriever.config()` (with the reranker revision and the refusal threshold), the answer prompt's content hash, the Azure deployment and the filters. The components are stored with each entry.
+- **Semantic layer (off):** nearest cached questions in Qdrant, then guards (the same provisions via `CitationRouter.find`, Defined Terms via `ContextAssembler.question_terms`, numbers), then verification.
+- **Verification on every hit:** each cited chunk still has the content hash it was answered from; SQLite decides expiry, whatever the Qdrant payload says.
+- **Stored only:** answered, gate `passed`, production label, first turn. Storing is best effort.
+
+**Cache eval, run #22 (draft pairs, 2026-10-14, $0.00003):**
+
+| Threshold | Similarity only: false hits | Paraphrases served | With guards: false hits | Paraphrases served |
+|---|---|---|---|---|
+| 0.80 | 17 / 32 | 100% | 8 | 97% |
+| 0.90 | 6 / 32 | 75% | 2 | 72% |
+| 0.95 | 4 / 32 | 22% | 1 | 19% |
+| 0.98 | 0 / 32 | 0% | 0 | 0% |
+
+- The guards stop 17 of 32 negatives (other client types, entities, thresholds, provisions).
+- They can't stop **"CFD on a major currency pair" vs "… minor currency pair" (cosine 0.978)** or "dealing between year-end and results" vs "after results" (0.936): the decisive word is ordinary.
+- Real paraphrases score 0.83–0.98, so no threshold separates them. The rule (worst guard-passing negative + 0.02, floor 0.90) gives 0.995: 0% of paraphrases served.
+- One guard false negative: "does that **person** have to live in the UAE" matched the Glossary term *Person*. It only matters if the semantic layer is ever enabled; the fix is to ignore very common terms, as context assembly does (`term_max_share`).
+
+**Decision (owner, 2026-10-14): exact repeats only.** `CACHE_SIMILARITY_THRESHOLD` stays unset. The alternatives were an LLM equivalence check on semantic candidates (about $0.0005 and under 1 s each) or a local duplicate-question cross-encoder. The semantic code, guards and eval stay, so either can be added and must pass the cache gate.
+
+**Checkpoint results (2026-10-14):** `data/app.db` migrated 0003 → 0004 (backup `data/app.pre-0004.db`, gitignored); the 4,060 chunks untouched.
+- Through the API:
+
+  | Turn | Result | Cost | Time |
+  |---|---|---|---|
+  | "Do we need a Client Agreement with a Market Counterparty?" | Miss, answered (COB 3.3.1, 3.3.2), stored | $0.0190 | 7.1 s |
+  | Same question, lower case, no "?" | **Exact hit**, linked to the first turn's trace | **$0** | **5 ms** |
+  | A paraphrase | Miss (by design), answered, stored | $0.0191 | 4.5 s |
+  | The Retail Client variant | Miss, answered "Yes" from COB 3.3.2 | $0.0196 | 5.0 s |
+  | "Do we need a Client Agreement with one?" after "What is a Market Counterparty?" | Rewritten to the cached question word for word: **exact hit** | $0.0012 (the rewrite) | 1.5 s |
+  | The first question with `RETRIEVAL_TOP_N=7` | Miss: a new namespace | $0.0187 | |
+
+- `scripts.cache purge` with the production config then deleted the one entry from the `top_n=7` namespace.
+- `/stats/cost` cache: 2 hits of 6 lookups, $0.037 saved.
+- `cost_report` (all time): production $0.16, evals $3.54, ingestion $0.012; OpenAI $0.012, Azure $3.70.
+- On a miss, the cache step takes 0.4–1.1 s: it is the query embedding, moved out of retrieval (whose `embed` time is now 0), not an added cost.
+- `pytest`: 414 offline + 38 corpus (the new one checks the live cache collection against the embedding model). `ruff check` is green.
+
+**Decisions made while building it:**
+- **The cache sits after the rewrite and before retrieval**, keyed on the standalone question. A gateway cache (keyed on the whole prompt, after retrieval) would see about 6k tokens of context and nowhere to put guards.
+- **Built on Qdrant + SQLite, not RedisVL or a gateway** (discussed at planning): no new service, testable offline with in-memory Qdrant, and SQLite already holds the audit trail and the cost rows.
+- **Only first turns are stored;** a follow-up can still hit through its rewrite.
+- **The namespace's corpus part changes only when an ingestion run finishes,** so a mid-ingest request sees the previous corpus hash. Retrieval is mixed during an ingest anyway.
+- **A failed cache write is logged, never fatal;** a failed lookup fails the turn like any other dependency.
+
+**Owner checkpoints still open:**
+- Review `data/eval/cache_pairs.yaml` and set `reviewed: true`. The cache gate fails on `reviewed_only` until then: run #22 passes every other check.
+- Review `docs/WRITEUP.md`.
 
 ## Phase J: VARA ⏸
 Manual download → manifest → a VARA chunker (a different numbering scheme) → ingest into the same collection with `regulator=VARA` → filters and eval questions.
@@ -589,6 +646,8 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 | The reranker runs on the GPU in fp16 (`bge-reranker-v2-m3`), all 40 candidates | ~65× faster than CPU with identical rankings; `rerank_k` stays configurable for CPU-only machines |
 | Langfuse together with a slim SQLite record; prompts in git, synced to Langfuse; git copy as fallback | Chosen by you at the start of the project |
 | Langfuse v4, not v3 | v4 GA since 2026-07-29; v3 gets security patches only until 2027-01; same components; a fresh install has nothing to migrate |
+| Answer cache built on Qdrant + SQLite, at the application level | No new service; offline-testable; keyed on the standalone question before retrieval, unlike a gateway cache |
+| Answer cache serves exact repeats only | Measured: a near-miss with a different answer (major/minor currency pair, 0.978) is closer than most paraphrases; no safe threshold |
 
 ## Open items / known limitations
 - Source typos: COB "Rule 16.6.4" and GEN "A2.3.2" (reported, not "fixed").
@@ -598,6 +657,9 @@ Manual download → manifest → a VARA chunker (a different numbering scheme) �
 - ClickHouse writes its own system log tables constantly (503 MB in its first 30 minutes, migrations included). Measure the volume's growth; if it matters, mount a `config.d` file that disables or shortens those logs.
 - `langfuse-web` and `langfuse-worker` have no compose healthcheck yet.
 - The prompt fallback can serve git text that hasn't been promoted (see Phase E decisions); a local cache of the last production version would close that gap.
+- The cache pairs (like the golden set) were drafted by an LLM and await the owner's review.
+- Re-run `src.eval.cache_eval` if the embedding model, the guards or the pairs change, and before setting any `CACHE_SIMILARITY_THRESHOLD`.
+- The cache's term guard treats very common one-word terms (*Person*) as decisive; harmless while the semantic layer is off.
 
 ## Commands
 ```
@@ -618,6 +680,10 @@ uv run python -m src.eval.run [--label staging] [--items a,b] [--include-unrevie
 uv run python -m src.eval.calibrate [--run ID]          # refusal threshold from the latest retrieval run
 uv run python -m src.eval.gate --run latest             # re-check a run against eval/thresholds.yaml
 uv run python -m scripts.sync_dataset [--dry-run]       # golden set -> Langfuse dataset dfsa-golden
+uv run python -m src.eval.cache_eval [--include-unreviewed] [--threshold T]   # answer cache: pairs, sweep, gate
+uv run python -m src.eval.gate --run latest --kind cache  # re-check the latest cache eval run
+uv run python -m scripts.cost_report [--days N | --since D --until D] [--json]   # all spend, by provider
+uv run python -m scripts.cache stats|purge|clear        # the answer cache
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

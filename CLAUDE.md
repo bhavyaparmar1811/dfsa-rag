@@ -16,6 +16,9 @@ Portfolio positioning: this is project 1 of a multi-project portfolio (productio
 - **Relational store**: SQLite (single file DB, see "SQLite" section below)
 - **Parsing**: Docling (layout-aware PDF to structured Markdown)
 - **Serving**: FastAPI
+- **Sparse retrieval**: BM25 via fastembed `Qdrant/bm25` (local)
+- **Reranker**: `BAAI/bge-reranker-v2-m3`, local cross-encoder (sentence-transformers), GPU fp16
+- **Tracing, prompt store, eval datasets**: Langfuse v4, self-hosted in Docker (`infra/docker-compose.yml`, setup in `docs/langfuse-setup.md`)
 - **Dev tool**: Claude Code
 
 Generation and embeddings use two different providers, so they need separate clients and separate credentials (`AZURE_OPENAI_*` for GPT-4o, `OPENAI_API_KEY` for embeddings). Keep them in separate config sections; never mix them up.
@@ -27,6 +30,12 @@ Generation and embeddings use two different providers, so they need separate cli
 - Store the embedding model name and dimension with every chunk (Qdrant payload + SQLite). At query time, check the configured model matches what the collection was built with; fail loudly if not.
 - Changing the embedding model means a **full re-embed** of the corpus into a new collection. Never mix vectors from two models in one collection.
 - Log embedding token usage and cost for both ingestion and queries.
+
+## Storage responsibilities
+
+- **SQLite is the system of record.** It holds every chunk, including those never embedded (section parents, rules split into parts, deleted provisions), plus cross-references, Defined Terms, runs, conversations, traces, eval runs and cache entries.
+- **Qdrant is an index only.** Its chunk collection holds the embeddable chunks; a point's id is its `chunks.id`. The cache collection holds one point per cache entry. Nothing lives only in Qdrant: a lost collection is rebuilt by `ingest`.
+- **Langfuse is where people look** at traces and edit prompts. The SQLite `traces` row is the audit record; the app works with Langfuse down (prompts fall back to the git copies).
 
 ## Data acquisition: read this before writing any ingestion code
 
@@ -49,7 +58,8 @@ Updating the corpus (new amendments, new modules) is a **manual re-download + re
 - **Chunking**: structure-aware, one chunk per rule/sub-rule (e.g. "COB 3.4.2"), not fixed-size splitting. Parent-child retrieval: small rule-level chunk for precision, parent section passed to the LLM for context.
 - **Contextual headers**: prepend the module/chapter/rule path (e.g. "Module: COB > Chapter 3 > Rule 3.4.2") to each chunk before embedding.
 - **Metadata per chunk**: regulator, module, rule number, heading path, effective date, version, source document, defined terms used, cross-references to other rules (extracted via regex on known rule-number formats), embedding model + dimension.
-- **Versioning**: hash-based. Store a hash per source document; only re-parse and re-embed when a document changes.
+- **Versioning**: hash-based. Store a hash per source document; only re-parse and re-embed when a document changes. Per chunk, `content_hash` decides re-embedding and `payload_hash` decides a payload-only rewrite.
+- **Chunk types**: `rule` (binding), `guidance` (non-binding), `definition` (binding; Glossary and Law Schedules), `article` (binding; Law articles and Schedule paragraphs), `text` (unnumbered: binding in a Law, non-binding in the Rulebook), `section` (a parent: stored, never embedded). Every context block shown to the LLM is labelled binding or non-binding.
 
 ## Retrieval
 
@@ -96,6 +106,22 @@ Operational notes:
 - Assistant messages store their cited chunk ids and trace_id, so any past answer can be audited back to the exact rules and retrieval results that produced it.
 - Chat history is **not** embedded into Qdrant and is never treated as a source of regulatory truth. Answers cite rulebook chunks only, never prior conversation turns.
 
+## Prompts and releases
+
+- Prompts live in git (`prompts/*.yaml`) and are synced to Langfuse as `staging` (`scripts/sync_prompts.py`). Each file declares its variables; compiling with a missing or unknown one raises.
+- `production` moves only through `scripts/promote_prompt.py`: the version must equal the **committed** file, and the newest e2e eval run with exactly that content must have passed `eval/thresholds.yaml`. `--skip-gate REASON` is a logged override, not a habit.
+- A rollback is a git revert, a sync and a promote. Never edit a prompt in the Langfuse UI.
+
+## Answer cache
+
+`src/chat/cache.py`. An answered question asked again is served from SQLite with no retrieval and no LLM call. Hard rules:
+
+- **Exact repeats only** (normalised standalone question), by decision: `CACHE_SIMILARITY_THRESHOLD` stays unset. The semantic layer exists but `src/eval/cache_eval.py` found no threshold that serves a paraphrase without serving a wrong answer ("major" vs "minor" currency pair scores 0.978). Enabling any threshold, or replacing it with an equivalence check, needs a passing cache eval (0 false hits on the hard negatives).
+- **Namespaced** by everything that shapes an answer: corpus content hashes, embedding and BM25 fingerprints, retrieval config (incl. reranker revision and refusal threshold), the answer prompt's hash, the model, the filters. Never serve an entry outside its namespace.
+- **Verified** on every hit: each cited chunk still has the content hash it was answered from.
+- **Stored only** for answered turns that passed the calibrated confidence gate, on production prompts, from first turns. Never cache refusals, errors, staging/eval turns or follow-up answers.
+- A cached turn still writes its messages and trace, linked to the trace of the turn that produced the answer.
+
 ## Evaluation
 
 - A hand-built golden Q&A test set covering all modules in the corpus, including a few questions that require resolving a term from a Laws document, and a few multi-turn follow-up cases to test query rewriting.
@@ -109,7 +135,7 @@ Every request logs: original and rewritten query, retrieved chunks with scores, 
 
 ## Cost tracking
 
-Log token usage and $ cost per request, split by embeddings (OpenAI) and generation (Azure OpenAI GPT-4o). Track semantic cache hit rate once caching is implemented. A simple dashboard or summary query should show total cost, cost per query, and cache hit rate over time.
+Log token usage and $ cost per request, split by embeddings (OpenAI) and generation (Azure OpenAI GPT-4o). Track the answer cache's hit rate. `scripts/cost_report.py` (all spend: production, evals, ingestion) and `GET /stats/cost` (production only, `?since=&until=`) show total cost, cost per query, refusals and cache hit rate over time.
 
 ## Repo structure
 
@@ -117,17 +143,26 @@ Log token usage and $ cost per request, split by embeddings (OpenAI) and generat
 data/
   raw/{dfsa,vara}/         # downloaded PDFs, gitignored (copyright)
   manifest.yaml
+  eval/golden.yaml         # golden Q&A set (committed)
+  eval/cache_pairs.yaml    # answer-cache calibration pairs (committed)
   app.db                   # SQLite, gitignored
+eval/thresholds.yaml       # release-gate limits
+prompts/                   # prompt files (git is the source of truth)
+infra/docker-compose.yml   # Qdrant + Langfuse
 src/
   config/                  # settings, incl. the single embedding model config
-  ingestion/               # Docling parsing, chunking
-  embeddings/              # one embedding client used by ingestion AND queries
-  storage/                 # SQLite + Qdrant clients, schema, migrations
-  retrieval/
-  chat/                    # conversation handling, history, query rewriting
-  eval/
+  ingestion/               # Docling parsing, chunking, ingest, reconcile
+  embeddings/              # one embedding client used by ingestion AND queries; BM25 encoder
+  storage/                 # SQLite models, repositories, migrations; Qdrant chunk + cache collections
+  retrieval/               # citation router, hybrid search, rerank, context assembly
+  generation/              # GPT-4o client, answerer, citation validator
+  chat/                    # conversations, history, query rewriting, answer cache
+  prompts/                 # prompt files, Langfuse sync, registry with git fallback
+  observability/           # Langfuse client, shared stats helpers
+  eval/                    # golden set, metrics, judges, runner, calibration, gates
   api/                     # FastAPI
-docs/
+scripts/                   # CLIs: ask, retrieve, cost_report, cache, sync/promote prompts, checks
+docs/                      # ROADMAP.MD, architecture.md, WRITEUP.md, langfuse-setup.md
 CLAUDE.md
 ```
 
@@ -138,4 +173,5 @@ CLAUDE.md
 - No fabricated citations: an answer without a real supporting chunk must refuse, not invent a rule number.
 - No embedding queries with a different model or dimension than the document chunks.
 - No citing chat history as a source.
-- No swapping core stack choices (Qdrant, SQLite, Docling, OpenAI embeddings, Azure OpenAI GPT-4o) without flagging it first.
+- No serving a cached answer outside its namespace, and no semantic cache threshold that hasn't passed the cache eval.
+- No swapping core stack choices (Qdrant, SQLite, Docling, OpenAI embeddings, Azure OpenAI GPT-4o, Langfuse) without flagging it first.

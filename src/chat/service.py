@@ -3,9 +3,12 @@
     send(conversation_id, message)
       history   the last CHAT_HISTORY_TURNS messages, from SQLite (never from the client)
       rewrite   a follow-up -> a standalone question (rewrite.py); none on the first turn
+      cache     the standalone question in the semantic answer cache (cache.py): a hit
+                skips retrieval and the answer step
       retrieve  the rewritten question (one at a time: a single GPU reranker)
       answer    cited answer or refusal (src/generation/answer.py)
-      store     user message + assistant message + trace row, in one transaction
+      store     user message + assistant message + trace row, in one transaction;
+                then an answered first turn goes into the cache
 
 One Langfuse trace per turn, grouped by conversation (session). Its id is
 created up front, so the SQLite trace row and Langfuse share it even when
@@ -18,6 +21,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import date
 
 import httpx
 import openai
@@ -25,14 +29,17 @@ from langfuse import propagate_attributes
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sqlalchemy import Engine
 
+from src.chat.cache import CacheLookup, SemanticCache
 from src.chat.rewrite import QueryRewriter, Rewrite, render_history
 from src.config.settings import (
     AzureOpenAISettings,
+    CacheSettings,
     ChatSettings,
     EmbeddingSettings,
     LangfuseSettings,
     RetrievalSettings,
 )
+from src.embeddings.client import EmbeddingResult
 from src.generation.answer import Answerer, AnswerResult
 from src.generation.llm import LLMClient
 from src.observability.langfuse import get_langfuse
@@ -70,11 +77,17 @@ class TurnResult:
     assistant_message_id: int
     trace_id: str
     rewrite: Rewrite
-    retrieval: RetrievalResult
+    retrieval: RetrievalResult | None  # None when the answer came from the cache
     answer: AnswerResult
     cost_usd: float
     latency_ms: dict[str, float]
     trace_url: str | None = None
+    cache: CacheLookup | None = None
+    cache_entry_id: str | None = None  # the entry served, or the one this answer was stored as
+
+    @property
+    def cached(self) -> bool:
+        return self.cache is not None and self.cache.hit is not None
 
 
 class ChatService:
@@ -85,12 +98,14 @@ class ChatService:
         answerer: Answerer,
         rewriter: QueryRewriter,
         cfg: ChatSettings | None = None,
+        cache: SemanticCache | None = None,
     ):
         self.engine = engine
         self.retriever = retriever
         self.answerer = answerer
         self.rewriter = rewriter
         self.cfg = cfg or ChatSettings()
+        self.cache = cache
         self._retrieve_lock = threading.Lock()
 
     @classmethod
@@ -98,13 +113,19 @@ class ChatService:
         """The real components: loads the reranker and checks the index matches the
         configured embedding model and BM25 settings."""
         retriever = Retriever.build(RetrievalSettings())
-        llm = LLMClient(AzureOpenAISettings())
+        azure = AzureOpenAISettings()
+        llm = LLMClient(azure)
         registry = PromptRegistry.from_settings()
+        engine = get_engine()
+        cache = None
+        if CacheSettings().enabled:
+            cache = SemanticCache.build(engine, retriever, registry, azure.deployment)
         return cls(
-            engine=get_engine(),
+            engine=engine,
             retriever=retriever,
             answerer=Answerer(llm, registry, retriever.citations.find),
             rewriter=QueryRewriter(llm, registry),
+            cache=cache,
         )
 
     # --- conversations ----------------------------------------------------------
@@ -125,9 +146,9 @@ class ChatService:
         with session_scope(self.engine) as s:
             return TraceRepository(s).get(trace_id)
 
-    def cost_stats(self) -> dict:
+    def cost_stats(self, since: date | None = None, until: date | None = None) -> dict:
         with session_scope(self.engine) as s:
-            return TraceRepository(s).cost_stats()
+            return TraceRepository(s).cost_stats(since, until)
 
     def health(self) -> dict[str, dict]:
         """Each dependency: {"ok": bool, ...details}. Cheap enough to poll."""
@@ -149,6 +170,13 @@ class ChatService:
             "device": getattr(reranker, "device", None),
             "revision": getattr(reranker, "revision", None),
         }
+        if self.cache is None:
+            checks["cache"] = {"ok": True, "enabled": False}
+        else:
+            try:
+                checks["cache"] = {"ok": True} | self.cache.stats()
+            except Exception as e:
+                checks["cache"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         cfg = LangfuseSettings()
         if not cfg.active:
             checks["langfuse"] = {"ok": True, "enabled": False}
@@ -189,7 +217,7 @@ class ChatService:
         langfuse = get_langfuse()
         trace_id = langfuse.create_trace_id()
         start = time.perf_counter()
-        rewrite = retrieval = answer = None
+        rewrite = lookup = retrieval = answer = None
         try:
             with (
                 langfuse.start_as_current_observation(
@@ -201,22 +229,35 @@ class ChatService:
                 propagate_attributes(session_id=conversation_id, trace_name="chat-turn"),
             ):
                 rewrite = self.rewriter.rewrite(content, history, label)
-                retrieval = self._retrieve(rewrite.question, filters)
-                answer = self.answerer.answer(retrieval, history=history, label=label)
+                lookup = self._lookup(rewrite.question, filters, label)
+                if lookup is not None and lookup.hit is not None:
+                    answer = lookup.hit.answer(rewrite.question)
+                else:
+                    embedding = lookup.embedding if lookup is not None else None
+                    retrieval = self._retrieve(rewrite.question, filters, embedding)
+                    answer = self.answerer.answer(retrieval, history=history, label=label)
                 root.update(
                     output={"status": answer.status, "text": answer.text},
-                    metadata={"rewritten_query": rewrite.question, "trace_id": trace_id},
+                    metadata={
+                        "rewritten_query": rewrite.question,
+                        "trace_id": trace_id,
+                        "cache": lookup.status if lookup else None,
+                    },
                 )
         except Exception as e:
-            latency = _latency(start, rewrite, retrieval, answer)
+            latency = _latency(start, rewrite, retrieval, answer, lookup)
             self._store_error(
-                trace_id, conversation_id, content, filters, rewrite, retrieval, e, latency
+                trace_id, conversation_id, content, filters, rewrite, retrieval, lookup, e, latency
             )
             logger.exception("chat turn %s failed", trace_id)
             raise TurnFailed(trace_id, e) from e
 
-        latency = _latency(start, rewrite, retrieval, answer)
-        cost = retrieval.embed_cost_usd + rewrite.cost_usd + answer.cost_usd
+        latency = _latency(start, rewrite, retrieval, answer, lookup)
+        # The query embedding counts once: retrieval's (it reuses the lookup's vector),
+        # or the lookup's alone on a hit.
+        embedder = retrieval if retrieval is not None else lookup
+        embed_cost = embedder.embed_cost_usd if embedder is not None else 0.0
+        cost = embed_cost + rewrite.cost_usd + answer.cost_usd
         with session_scope(self.engine) as s:
             conv = ConversationRepository(s).get(conversation_id)
             ConversationRepository(s).touch(conv, title=_title(content))
@@ -255,15 +296,33 @@ class ChatService:
                     latency_ms=latency["total"],
                 )
             )
-            row = _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval)
+            row = _trace_row(
+                trace_id, conversation_id, content, filters, rewrite, retrieval, lookup
+            )
             TraceRepository(s).add(Trace(**row, **_answer_fields(answer, cost, latency)))
             ids = (user.id, assistant.id)
 
+        entry_id = lookup.hit.entry_id if lookup and lookup.hit else None
+        if self.cache is not None and lookup is not None and lookup.hit is None:
+            entry_id = self.cache.store(
+                lookup,
+                question=content,
+                query=rewrite.question,
+                answer=answer,
+                trace_id=trace_id,
+                cost_usd=cost,
+                first_turn=not history,
+            )
+            if entry_id is not None:
+                with session_scope(self.engine) as s:
+                    TraceRepository(s).set_cache_entry(trace_id, entry_id)
+
         logger.info(
-            "chat %s: %s%s, $%.6f, %.0f ms",
+            "chat %s: %s%s%s, $%.6f, %.0f ms",
             conversation_id[:8],
             answer.status,
             " (rewritten)" if rewrite.changed else "",
+            f" (cache {lookup.hit.kind} hit)" if lookup and lookup.hit else "",
             cost,
             latency["total"],
         )
@@ -278,23 +337,37 @@ class ChatService:
             cost_usd=cost,
             latency_ms=latency,
             trace_url=trace_url(trace_id),
+            cache=lookup,
+            cache_entry_id=entry_id,
         )
 
-    def _retrieve(self, question: str, filters: Filters) -> RetrievalResult:
-        langfuse, emb = get_langfuse(), EmbeddingSettings()
+    def _lookup(self, question: str, filters: Filters, label: str | None) -> CacheLookup | None:
+        if self.cache is None:
+            return None
+        with get_langfuse().start_as_current_observation(
+            name="semantic-cache", as_type="retriever", input={"question": question}
+        ) as obs:
+            lookup = self.cache.lookup(question, filters, label)
+            if lookup.hit is not None and lookup.embedding is not None:
+                # No retrieval follows, so this is the turn's query embedding.
+                _embed_observation(lookup.embed_tokens, lookup.embed_cost_usd)
+            obs.update(
+                output={"status": lookup.status, "entry_id": lookup.hit and lookup.hit.entry_id},
+                metadata={k: v for k, v in lookup.trace().items() if k != "components"},
+            )
+        return lookup
+
+    def _retrieve(
+        self, question: str, filters: Filters, embedding: EmbeddingResult | None = None
+    ) -> RetrievalResult:
+        """`embedding`: the question's vector from the cache lookup, reused."""
+        langfuse = get_langfuse()
         with langfuse.start_as_current_observation(
             name="retrieve", as_type="retriever", input={"question": question}
         ) as obs:
             with self._retrieve_lock:
-                retrieval = self.retriever.retrieve(question, filters)
-            with langfuse.start_as_current_observation(
-                name="embed-query",
-                as_type="embedding",
-                model=emb.model,
-                usage_details={"input": retrieval.embed_tokens},
-                cost_details={"input": retrieval.embed_cost_usd},
-            ):
-                pass
+                retrieval = self.retriever.retrieve(question, filters, embedding)
+            _embed_observation(retrieval.embed_tokens, retrieval.embed_cost_usd)
             obs.update(
                 output={
                     "hits": [h.key for h in retrieval.hits],
@@ -305,9 +378,10 @@ class ChatService:
         return retrieval
 
     def _store_error(
-        self, trace_id, conversation_id, content, filters, rewrite, retrieval, error, latency
-    ) -> None:
-        row = _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval)
+        self, trace_id, conversation_id, content, filters, rewrite, retrieval, lookup, error,
+        latency,
+    ) -> None:  # fmt: skip
+        row = _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval, lookup)
         row |= {
             "status": "error",
             "error": f"{type(error).__name__}: {error}"[:2000],
@@ -319,6 +393,17 @@ class ChatService:
                 TraceRepository(s).add(Trace(**row))
         except Exception:
             logger.exception("could not store the error trace %s", trace_id)
+
+
+def _embed_observation(tokens: int, cost_usd: float) -> None:
+    with get_langfuse().start_as_current_observation(
+        name="embed-query",
+        as_type="embedding",
+        model=EmbeddingSettings().model,
+        usage_details={"input": tokens},
+        cost_details={"input": cost_usd},
+    ):
+        pass
 
 
 def trace_url(trace_id: str) -> str | None:
@@ -336,19 +421,24 @@ def _title(content: str) -> str:
     return text if len(text) <= TITLE_CHARS else text[: TITLE_CHARS - 1].rstrip() + "…"
 
 
-def _latency(start, rewrite, retrieval, answer) -> dict[str, float]:
+def _latency(start, rewrite, retrieval, answer, lookup) -> dict[str, float]:
     out = {"total": round((time.perf_counter() - start) * 1000, 1)}
     if rewrite is not None and rewrite.llm is not None:
         out["rewrite"] = round(rewrite.llm.latency_ms, 1)
+    if lookup is not None and lookup.status != "bypass":
+        out["cache"] = round(lookup.latency_ms, 1)
     if retrieval is not None:
         out["retrieve"] = round(retrieval.timings_ms.get("total", 0.0), 1)
-    if answer is not None:
+    if answer is not None and answer.timings_ms:  # a cached answer has no answer step
         out["answer"] = round(answer.timings_ms.get("total", 0.0), 1)
     return out
 
 
-def _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval) -> dict:
+def _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval, lookup) -> dict:
     llm = rewrite.llm if rewrite else None
+    hit = lookup.hit if lookup else None
+    # The query embedding: retrieval's (it reuses the lookup's vector), else the lookup's.
+    embedder = retrieval if retrieval is not None else lookup
     return {
         "id": trace_id,
         "conversation_id": conversation_id,
@@ -359,11 +449,15 @@ def _trace_row(trace_id, conversation_id, content, filters, rewrite, retrieval) 
         "rewrite": rewrite.trace() if rewrite else None,
         "retrieval": retrieval.trace() if retrieval else None,
         "confidence": retrieval.confidence if retrieval else None,
-        "embed_tokens": retrieval.embed_tokens if retrieval else 0,
-        "embed_cost_usd": retrieval.embed_cost_usd if retrieval else 0.0,
+        "embed_tokens": embedder.embed_tokens if embedder else 0,
+        "embed_cost_usd": embedder.embed_cost_usd if embedder else 0.0,
         "rewrite_input_tokens": llm.input_tokens if llm else 0,
         "rewrite_output_tokens": llm.output_tokens if llm else 0,
         "rewrite_cost_usd": llm.cost_usd if llm else 0.0,
+        "cache_status": lookup.status if lookup else None,
+        "cache_entry_id": hit.entry_id if hit else None,
+        "cache_similarity": hit.similarity if hit else None,
+        "cache": lookup.trace() if lookup else None,
     }
 
 

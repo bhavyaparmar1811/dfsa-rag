@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from sqlalchemy import Engine
 
 from src.config.settings import EmbeddingSettings, QdrantSettings, RetrievalSettings
-from src.embeddings.client import EmbeddingClient
+from src.embeddings.client import EmbeddingClient, EmbeddingResult
 from src.embeddings.sparse import SparseEncoder
 from src.ingestion.chunkers.law import law_name
 from src.ingestion.manifest import load_manifest
@@ -80,7 +80,13 @@ class Retriever:
             assembler=ContextAssembler(engine, cfg),
         )
 
-    def retrieve(self, question: str, filters: Filters | None = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        question: str,
+        filters: Filters | None = None,
+        query_embedding: EmbeddingResult | None = None,
+    ) -> RetrievalResult:
+        """`query_embedding`: the question's dense vector, if already computed."""
         cfg, filters = self.cfg, filters or Filters()
         timings: dict[str, float] = {}
         start = time.perf_counter()
@@ -91,7 +97,7 @@ class Retriever:
             lookup, exact = self.citations.lookup(question, filters)
         timings["citations"] = _ms(t)
 
-        searched = self.searcher.search(question, filters)
+        searched = self.searcher.search(question, filters, query_embedding)
         timings |= searched.timings_ms
 
         # Exact hits first, then search results not already among them.
@@ -129,7 +135,7 @@ class Retriever:
         result = RetrievalResult(
             question=question,
             filters=filters,
-            config=_config(cfg) | self._runtime(),
+            config=self.config(),
             citations=lookup,
             candidates=candidates,
             hits=hits,
@@ -149,6 +155,11 @@ class Retriever:
             len(context), result.context_tokens, timings["total"],
         )  # fmt: skip
         return result
+
+    def config(self) -> dict:
+        """The settings that shape a result, plus where the reranker runs and which
+        revision it is: in every trace, and part of the semantic cache's namespace."""
+        return _config(self.cfg) | self._runtime()
 
     def _runtime(self) -> dict:
         """Where the reranker actually runs, for the trace (the config only says "auto")."""

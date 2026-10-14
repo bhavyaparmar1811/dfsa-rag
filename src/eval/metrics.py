@@ -21,6 +21,7 @@ import math
 from collections.abc import Iterable, Sequence
 
 from src.eval.golden import Turn, provision
+from src.observability.stats import percentile
 
 K_VALUES = (1, 3, 6, 20, 40)
 NDCG_K = 6
@@ -107,16 +108,6 @@ def citation_scores(cited: Iterable[str], turn: Turn) -> dict:
         "citation_precision": len(cited & relevant) / len(cited),
         "citation_recall": len(cited & set(turn.gold)) / len(turn.gold),
     }
-
-
-def percentile(values: Sequence[float], q: float) -> float | None:
-    """Linear interpolation between closest ranks (numpy's default)."""
-    if not values:
-        return None
-    xs = sorted(values)
-    pos = (len(xs) - 1) * q / 100
-    lo, hi = math.floor(pos), math.ceil(pos)
-    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
 
 
 def _mean(values: Iterable[float | None]) -> float | None:

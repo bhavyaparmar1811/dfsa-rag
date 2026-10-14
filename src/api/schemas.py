@@ -53,6 +53,16 @@ class Refusal(BaseModel):
     reason: str
 
 
+class CacheInfo(BaseModel):
+    """Where a cached answer came from: the turn that first produced it is auditable
+    through its trace."""
+
+    kind: Literal["exact", "semantic"]
+    similarity: float | None  # None for an exact repeat
+    entry_id: str
+    source_trace_id: str
+
+
 class TurnOut(BaseModel):
     conversation_id: str
     message_id: int
@@ -67,6 +77,8 @@ class TurnOut(BaseModel):
     trace_url: str | None
     cost_usd: float
     latency_ms: dict[str, float]
+    cached: bool = False
+    cache: CacheInfo | None = None
 
 
 class MessageOut(BaseModel):

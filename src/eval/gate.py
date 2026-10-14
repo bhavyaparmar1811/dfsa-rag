@@ -2,6 +2,7 @@
 
     uv run python -m src.eval.gate --run latest      # re-check a stored run, exit 1 if it fails
     uv run python -m src.eval.gate --run 12
+    uv run python -m src.eval.gate --run latest --kind cache   # the semantic cache's gate
 
 A run passes when:
     - it is an e2e run over reviewed items only, with at least `min_reviewed_items`
@@ -27,10 +28,20 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine
 
-from src.config.settings import PathSettings
+from src.config.settings import CacheSettings, PathSettings
 from src.storage.db import get_engine, session_scope
 from src.storage.models import EvalRun
 from src.storage.repositories import EvalRunRepository
+
+
+class CacheLimits(BaseModel):
+    """The semantic cache's gate (src/eval/cache_eval.py runs, kind="cache")."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    min_pairs: int
+    max_false_hits: int  # 0: serving one wrong answer blocks the release
+    min_positive_hit_rate: float | None  # set from the calibration run
 
 
 class Thresholds(BaseModel):
@@ -42,6 +53,7 @@ class Thresholds(BaseModel):
     floors: dict[str, float | None]
     ceilings: dict[str, float | None]
     max_regression: float
+    cache: CacheLimits | None = None
 
 
 def load_thresholds(path: Path | None = None) -> Thresholds:
@@ -94,6 +106,8 @@ class GateReport:
 
 
 def evaluate(run: EvalRun, thresholds: Thresholds, baseline: EvalRun | None) -> GateReport:
+    if run.kind == "cache":
+        return evaluate_cache(run, thresholds)
     report = GateReport(run_id=run.id, baseline_run=baseline.id if baseline else None)
     add = report.checks.append
     m = run.metrics or {}
@@ -135,6 +149,35 @@ def evaluate(run: EvalRun, thresholds: Thresholds, baseline: EvalRun | None) -> 
     return report
 
 
+def evaluate_cache(run: EvalRun, thresholds: Thresholds) -> GateReport:
+    """A cache eval run passes when, at the threshold it evaluated, no hard negative
+    is served, enough paraphrases are, and that threshold is the one configured."""
+    report = GateReport(run_id=run.id)
+    add = report.checks.append
+    m, limits = run.metrics or {}, thresholds.cache
+    add(Check("status", "==", run.status, "ok", run.status == "ok"))
+    add(Check("reviewed_only", "==", str(run.reviewed_only), "True", bool(run.reviewed_only)))
+    if limits is None:
+        add(Check("cache limits", "==", None, "set", False, note="no `cache` block in thresholds"))
+        return report
+    add(Check("pairs", ">=", run.n_items, limits.min_pairs, run.n_items >= limits.min_pairs))
+    add(_limit("false_hits", m.get("false_hits"), "<=", limits.max_false_hits))
+    rate = m.get("positive_hit_rate")
+    add(_limit("positive_hit_rate", rate, ">=", limits.min_positive_hit_rate))
+    configured = CacheSettings().similarity_threshold
+    add(
+        Check(
+            "threshold",
+            "==",
+            m.get("threshold"),
+            configured,
+            m.get("threshold") == configured,
+            note="the run must evaluate CACHE_SIMILARITY_THRESHOLD",
+        )
+    )
+    return report
+
+
 def _limit(name: str, value, op: str, limit: float | None) -> Check:
     if limit is None:
         return Check(name, op, value, None, False, note="limit not set in thresholds.yaml")
@@ -146,6 +189,8 @@ def _limit(name: str, value, op: str, limit: float | None) -> Check:
 
 def baseline_for(repo: EvalRunRepository, run: EvalRun, thresholds: Thresholds) -> EvalRun | None:
     """The last passing e2e run of the production config on the same golden set."""
+    if run.kind != "e2e":
+        return None
     return repo.latest(
         kind="e2e",
         config_name=thresholds.config,
@@ -200,15 +245,16 @@ def promotion_evidence(engine: Engine, name: str, content_hash: str, golden_hash
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Check an eval run against eval/thresholds.yaml.")
     ap.add_argument("--run", default="latest", help="run id, or 'latest' (latest e2e run)")
+    ap.add_argument("--kind", default="e2e", choices=["e2e", "cache"], help="for --run latest")
     args = ap.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     engine = get_engine()
     if args.run == "latest":
         with session_scope(engine) as s:
-            run = EvalRunRepository(s).latest(kind="e2e")
+            run = EvalRunRepository(s).latest(kind=args.kind)
         if run is None:
-            print("No finished e2e eval run yet.")
+            print(f"No finished {args.kind} eval run yet.")
             return 1
         run_id = run.id
     else:

@@ -51,15 +51,24 @@ def main() -> int:
         print(json.dumps(row, indent=2, ensure_ascii=False, default=str))
         return 0
 
-    conf = "n/a" if retrieval.confidence is None else f"{retrieval.confidence:.3f}"
     print(f"Conversation: {conversation}")
     print(f"Question: {args.question}")
     if turn.rewrite.changed:
         print(f"Rewritten: {turn.rewrite.question}")
     elif turn.rewrite.fallback_reason:
         print(f"Rewrite discarded: {turn.rewrite.fallback_reason}")
-    print(f"Retrieval: confidence {conf}, gate {answer.gate}, {len(retrieval.context)} blocks, "
-          f"{retrieval.context_tokens} tokens")  # fmt: skip
+    if turn.cached:
+        hit = turn.cache.hit
+        similarity = "exact repeat" if hit.similarity is None else f"cosine {hit.similarity:.3f}"
+        print(f"Cache: {hit.kind} hit ({similarity}) of \"{hit.cached_query}\"; "
+              f"first answered in trace {hit.source_trace_id}")  # fmt: skip
+    else:
+        conf = "n/a" if retrieval.confidence is None else f"{retrieval.confidence:.3f}"
+        print(f"Retrieval: confidence {conf}, gate {answer.gate}, {len(retrieval.context)} "
+              f"blocks, {retrieval.context_tokens} tokens")  # fmt: skip
+        if turn.cache is not None:
+            stored = f"; stored as {turn.cache_entry_id}" if turn.cache_entry_id else ""
+            print(f"Cache: {turn.cache.status} ({turn.cache.reason}){stored}")
     if answer.refused:
         print(f"\nREFUSED ({answer.refusal.code})")
     print()

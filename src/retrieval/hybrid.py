@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from qdrant_client import models as qm
 
 from src.config.settings import RetrievalSettings
-from src.embeddings.client import EmbeddingClient
+from src.embeddings.client import EmbeddingClient, EmbeddingResult
 from src.embeddings.sparse import SparseEncoder
 from src.retrieval.models import Candidate, Filters
 from src.storage.qdrant_store import DENSE, SPARSE, QdrantStore
@@ -44,16 +44,27 @@ class HybridSearcher:
         self.sparse = sparse
         self.cfg = cfg
 
-    def search(self, question: str, filters: Filters | None = None) -> SearchResult:
+    def search(
+        self,
+        question: str,
+        filters: Filters | None = None,
+        query_embedding: EmbeddingResult | None = None,
+    ) -> SearchResult:
+        """`query_embedding`: the question's vector if the caller already has it (the
+        semantic cache embeds the same question first), so it is never embedded twice."""
         mode, k = self.cfg.mode, self.cfg.candidate_k
         flt = (filters or Filters()).to_qdrant()
         result = SearchResult(candidates=[])
         requests: list[tuple[str, qm.QueryRequest]] = []
 
         if mode in ("dense", "hybrid"):
-            start = time.perf_counter()
-            embedded = self.embedder.embed_query(question)
-            result.timings_ms["embed"] = (time.perf_counter() - start) * 1000
+            if query_embedding is not None:
+                embedded = query_embedding
+                result.timings_ms["embed"] = 0.0  # spent (and traced) by the cache lookup
+            else:
+                start = time.perf_counter()
+                embedded = self.embedder.embed_query(question)
+                result.timings_ms["embed"] = (time.perf_counter() - start) * 1000
             result.embed_tokens, result.embed_cost_usd = embedded.prompt_tokens, embedded.cost_usd
             requests.append(("dense", _request(embedded.vectors[0], DENSE, flt, k)))
         if mode in ("sparse", "hybrid"):

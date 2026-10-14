@@ -1,0 +1,311 @@
+# Semantic cache calibration pairs (Phase I3): src/eval/cache_eval.py
+#
+#   uv run python -m src.eval.cache_eval [--include-unreviewed]
+#
+# Each pair is a question already in the cache (`cached`) and a new one (`asked`):
+#   positive  the same question in other words: serving the cached answer is right
+#   negative  a near miss with a DIFFERENT correct answer (another client type,
+#             entity, threshold, regime or module): serving it would be wrong
+#
+# The negatives are the point. Calibration picks the lowest similarity threshold
+# at which no negative is served (after the citation / Defined Term / number
+# guards), plus a margin. The same sweep without the guards shows what a plain
+# similarity cache would have served.
+#
+# Drafted by Claude from data/eval/golden.yaml; `reviewed: false` until the owner
+# has checked every `why` (is the answer really different?).
+
+reviewed: false
+
+pairs:
+  # --- positives: paraphrases of golden questions -----------------------------
+  - id: pos-cob-suitability
+    kind: positive
+    cached: "Do we need to assess whether an investment is suitable for a client before we recommend it to them?"
+    asked: "Before recommending an investment to a client, are we required to check that it is suitable for them?"
+  - id: pos-cob-assessed-professional
+    kind: positive
+    cached: "What net assets does an individual need to be classified as an assessed Professional Client?"
+    asked: "How much in net assets must an individual have to be treated as an assessed Professional Client?"
+  - id: pos-cob-classification-records
+    kind: positive
+    cached: "How long do we have to keep the records showing how we classified a client?"
+    asked: "For how long must we retain our client classification records?"
+  - id: pos-cob-periodic-statements
+    kind: positive
+    cached: "How often must an investment manager send periodic statements to its clients?"
+    asked: "How frequently does an investment manager have to send its clients periodic statements?"
+  - id: pos-cob-personal-account
+    kind: positive
+    cached: "What controls must we have over employees' personal account trading?"
+    asked: "What controls are we required to have over personal account dealing by our employees?"
+  - id: pos-cob-cfd-margin
+    kind: positive
+    cached: "What is the minimum margin a retail client must post to open a CFD on a major currency pair?"
+    asked: "What minimum margin does a retail client need to open a CFD on a major currency pair?"
+  - id: pos-cob-category-4
+    kind: positive
+    cached: "Is a Category 4 firm allowed to hold client money?"
+    asked: "Can a Category 4 firm hold client money?"
+  - id: pos-gen-cyber
+    kind: positive
+    cached: "How quickly do we have to tell the DFSA about a material cyber incident?"
+    asked: "What is the deadline for notifying the DFSA of a material cyber incident?"
+  - id: pos-gen-whistleblowing
+    kind: positive
+    cached: "What whistleblowing arrangements does an Authorised Person need to have?"
+    asked: "Which whistleblowing arrangements must an Authorised Person put in place?"
+  - id: pos-gen-auditor
+    kind: positive
+    cached: "Our auditor has resigned. Do we have to notify the DFSA?"
+    asked: "Must we notify the DFSA if our auditor resigns?"
+  - id: pos-aml-cdd-timing
+    kind: positive
+    cached: "When do we have to carry out customer due diligence on a new customer?"
+    asked: "At what point must we carry out customer due diligence on a new customer?"
+  - id: pos-aml-verification
+    kind: positive
+    cached: "Can we start a business relationship before we have finished verifying the customer's identity?"
+    asked: "Are we allowed to establish a business relationship before verification of the customer's identity is complete?"
+  - id: pos-aml-records
+    kind: positive
+    cached: "How long must we keep customer due diligence records?"
+    asked: "What is the retention period for customer due diligence records?"
+  - id: pos-aml-reliance
+    kind: positive
+    cached: "Can we rely on another firm to carry out customer due diligence for us?"
+    asked: "Are we permitted to rely on a third party firm to do customer due diligence for us?"
+  - id: pos-aml-mlro-report
+    kind: positive
+    cached: "What must the MLRO do after an employee reports a suspicion of money laundering?"
+    asked: "What are the MLRO's obligations once an employee reports suspected money laundering?"
+  - id: pos-mkt-inside-information
+    kind: positive
+    cached: "When does a listed company have to disclose inside information to the market?"
+    asked: "When must a listed company make inside information public?"
+  - id: pos-mkt-delay
+    kind: positive
+    cached: "Can a Reporting Entity delay announcing inside information?"
+    asked: "Is a Reporting Entity allowed to delay the disclosure of inside information?"
+  - id: pos-mkt-related-party
+    kind: positive
+    cached: "When does a related party transaction need shareholder approval?"
+    asked: "When is shareholder approval required for a related party transaction?"
+  - id: pos-mkt-prospectus-publication
+    kind: positive
+    cached: "Once the DFSA approves our prospectus, when do we have to make it public?"
+    asked: "After the DFSA has approved our prospectus, when must we publish it?"
+  - id: pos-fpr-custodian
+    kind: positive
+    cached: "Does a passported Public Fund need a custodian?"
+    asked: "Is a custodian required for a passported Public Fund?"
+  - id: pos-fpr-deregistration
+    kind: positive
+    cached: "On what grounds can the DFSA de-register a Passported Fund?"
+    asked: "What are the grounds on which the DFSA may de-register a Passported Fund?"
+  - id: pos-glo-retail-client
+    kind: positive
+    cached: "What is a Retail Client?"
+    asked: "What does Retail Client mean?"
+  - id: pos-glo-pep
+    kind: positive
+    cached: "Who counts as a Politically Exposed Person?"
+    asked: "Who is a Politically Exposed Person?"
+  - id: pos-glo-rsi
+    kind: positive
+    cached: "What is a Restricted Speculative Investment?"
+    asked: "What is meant by a Restricted Speculative Investment?"
+  - id: pos-law-special-resolution
+    kind: positive
+    cached: "What majority of Unitholders' votes is needed to pass a Special Resolution of a Fund?"
+    asked: "What majority of Unitholder votes does a Special Resolution of a Fund require?"
+  - id: pos-law-fsp
+    kind: positive
+    cached: "What is the Financial Services Prohibition?"
+    asked: "What does the Financial Services Prohibition say?"
+  - id: pos-exm-client-agreement-mc
+    kind: positive
+    cached: "Do we need a Client Agreement with a Market Counterparty?"
+    asked: "Is a Client Agreement required when dealing with a Market Counterparty?"
+  - id: pos-exm-execution-only
+    kind: positive
+    cached: "Do we have to do a suitability assessment for an execution-only trade?"
+    asked: "Is a suitability assessment required for an execution-only transaction?"
+  - id: pos-exm-best-execution-mc
+    kind: positive
+    cached: "Do the best execution rules apply when we trade with a Market Counterparty?"
+    asked: "Does best execution apply to our trades with a Market Counterparty?"
+  - id: pos-exm-exempt-offer
+    kind: positive
+    cached: "Do we need a prospectus to offer securities to 30 investors in the DIFC?"
+    asked: "Is a prospectus required for an offer of securities to 30 investors in the DIFC?"
+  - id: pos-mt-confirmation-deadline
+    kind: positive
+    cached: "What is the deadline for sending a confirmation note after executing a client's transaction?"
+    asked: "How soon after executing a client's transaction must we send the confirmation note?"
+  - id: pos-aml-mlro-residency
+    kind: positive
+    cached: "Who must we appoint as MLRO and does that person have to live in the UAE?"
+    asked: "Whom must we appoint as MLRO, and must they be resident in the UAE?"
+
+  # --- hard negatives: same topic, different correct answer -------------------
+  - id: neg-client-agreement-retail
+    kind: negative
+    cached: "Do we need a Client Agreement with a Market Counterparty?"
+    asked: "Do we need a Client Agreement with a Retail Client?"
+    why: "No for a Market Counterparty (COB 3.3.1 scope exclusion); yes for a Retail Client (COB 3.3.2)."
+  - id: neg-client-agreement-default
+    kind: negative
+    cached: "Do we need a Client Agreement before providing a financial service to a Market Counterparty?"
+    asked: "Do we need a Client Agreement before providing a financial service to a client?"
+    why: "The general rule (COB 3.3.2) applies to clients; Market Counterparties are carved out (COB 3.3.1)."
+  - id: neg-best-execution-retail
+    kind: negative
+    cached: "Do the best execution rules apply when we trade with a Market Counterparty?"
+    asked: "Do the best execution rules apply when we trade with a Retail Client?"
+    why: "Best execution does not apply to Market Counterparty business; it does for Retail Clients."
+  - id: neg-exempt-offer-80
+    kind: negative
+    cached: "Do we need a prospectus to offer securities to 30 investors in the DIFC?"
+    asked: "Do we need a prospectus to offer securities to 80 investors in the DIFC?"
+    why: "Fewer than 50 offerees is an Exempt Offer (MKT 2.3.1); 80 is above the threshold."
+  - id: neg-cfd-minor-pair
+    kind: negative
+    cached: "What is the minimum margin a retail client must post to open a CFD on a major currency pair?"
+    asked: "What is the minimum margin a retail client must post to open a CFD on a minor currency pair?"
+    why: "Major and minor currency pairs have different minimum margins; no term or number differs."
+  - id: neg-cfd-gold
+    kind: negative
+    cached: "What is the minimum margin a retail client must post to open a CFD on a major currency pair?"
+    asked: "What is the minimum margin a retail client must post to open a CFD on gold?"
+    why: "Different underlying asset class, different minimum margin."
+  - id: neg-listed-fund-inside-information
+    kind: negative
+    cached: "When does a listed company have to disclose inside information to the market?"
+    asked: "When does a listed fund have to disclose inside information to the market?"
+    why: "Listed companies: MKT 4.2.1; listed funds: MKT 6.5 (the Phase H wrong-regime finding)."
+  - id: neg-records-classification
+    kind: negative
+    cached: "How long must we keep customer due diligence records?"
+    asked: "How long must we keep client classification records?"
+    why: "AML record keeping vs COB classification records: different provisions."
+  - id: neg-category-3a
+    kind: negative
+    cached: "Is a Category 4 firm allowed to hold client money?"
+    asked: "Is a Category 3A firm allowed to hold client money?"
+    why: "Category 4 firms may not hold client money; the answer for Category 3A differs."
+  - id: neg-cyber-vs-auditor
+    kind: negative
+    cached: "How quickly do we have to tell the DFSA about a material cyber incident?"
+    asked: "How quickly do we have to tell the DFSA about a change of auditor?"
+    why: "Different notification events, different rules and deadlines."
+  - id: neg-verification-vs-risk-assessment
+    kind: negative
+    cached: "Can we start a business relationship before we have finished verifying the customer's identity?"
+    asked: "Can we start a business relationship before we have finished the customer risk assessment?"
+    why: "Delayed verification is permitted in limited cases; the risk assessment comes first (AML 6.1.1)."
+  - id: neg-cdd-vs-edd
+    kind: negative
+    cached: "When do we have to carry out customer due diligence on a new customer?"
+    asked: "When do we have to carry out enhanced due diligence on a customer?"
+    why: "CDD timing vs the triggers for enhanced due diligence (high risk, PEPs)."
+  - id: neg-pep-close-associate
+    kind: negative
+    cached: "Who counts as a Politically Exposed Person?"
+    asked: "Who counts as a close associate of a Politically Exposed Person?"
+    why: "A different defined category with its own definition."
+  - id: neg-retail-vs-professional
+    kind: negative
+    cached: "What is a Retail Client?"
+    asked: "What is a Professional Client?"
+    why: "Different definitions."
+  - id: neg-retail-vs-market-counterparty
+    kind: negative
+    cached: "What is a Retail Client?"
+    asked: "What is a Market Counterparty?"
+    why: "Different definitions."
+  - id: neg-assessed-professional-undertaking
+    kind: negative
+    cached: "What net assets does an individual need to be classified as an assessed Professional Client?"
+    asked: "What net assets does an undertaking need to be classified as an assessed Professional Client?"
+    why: "Individuals and undertakings have different thresholds and tests."
+  - id: neg-private-fund-custodian
+    kind: negative
+    cached: "Does a passported Public Fund need a custodian?"
+    asked: "Does a passported Private Fund need a custodian?"
+    why: "Public and Private Funds have different custody requirements."
+  - id: neg-passport-timeline-public
+    kind: negative
+    cached: "After the DFSA receives a complete passport notice for a Private Fund, how long does it take to notify the Host Regulator?"
+    asked: "After the DFSA receives a complete passport notice for a Public Fund, how long does it take to notify the Host Regulator?"
+    why: "Private and Public Fund passporting have different timelines."
+  - id: neg-periodic-statements-custodian
+    kind: negative
+    cached: "How often must an investment manager send periodic statements to its clients?"
+    asked: "How often must a custodian send statements of client assets to its clients?"
+    why: "Periodic statements vs client asset statements: different rules and frequencies."
+  - id: neg-delay-vs-must-disclose
+    kind: negative
+    cached: "Can a Reporting Entity delay announcing inside information?"
+    asked: "What must a Reporting Entity do if inside information leaks during a delay?"
+    why: "Permission to delay vs the obligation when confidentiality is lost."
+  - id: neg-close-period-outside
+    kind: negative
+    cached: "Can directors deal in the company's shares between the financial year end and the publication of the annual results?"
+    asked: "Can directors deal in the company's shares after the annual results have been published?"
+    why: "Inside the close period dealing is restricted; after publication it is not."
+  - id: neg-relevant-person-law-vs-aml
+    kind: negative
+    cached: "How does the Regulatory Law define a 'Relevant Person' for its anti-money laundering Part?"
+    asked: "Who is a 'Relevant Person' for the purposes of the AML module?"
+    why: "Regulatory Law Art. 70 vs AML 1.1.2: different provisions (a Phase H finding)."
+  - id: neg-suitability-discretionary
+    kind: negative
+    cached: "Do we have to do a suitability assessment for an execution-only trade?"
+    asked: "Do we have to do a suitability assessment for a discretionary portfolio management service?"
+    why: "Execution-only is excluded (COB 3.4.1); discretionary management is not."
+  - id: neg-complaint-professional
+    kind: negative
+    cached: "What must we do when we receive a complaint from a retail client, and how quickly should we acknowledge it?"
+    asked: "What must we do when we receive a complaint from a professional client, and how quickly should we acknowledge it?"
+    why: "The complaints handling rules differ by client type."
+  - id: neg-amended-terms-professional
+    kind: negative
+    cached: "How much notice must we give a retail client before providing services on amended Client Agreement terms?"
+    asked: "How much notice must we give a professional client before providing services on amended Client Agreement terms?"
+    why: "The notice requirement applies to Retail Clients."
+  - id: neg-aml-return-vs-financials
+    kind: negative
+    cached: "When is the annual AML return due and what period does it cover?"
+    asked: "When are the annual audited financial statements due?"
+    why: "Different reports, different deadlines."
+  - id: neg-classification-vs-complaint-records
+    kind: negative
+    cached: "How long do we have to keep the records showing how we classified a client?"
+    asked: "How long do we have to keep records of client complaints?"
+    why: "Different record-keeping rules."
+  - id: neg-crowdfunding-limit
+    kind: negative
+    cached: "Can retail investors use a credit card to invest through our crowdfunding platform?"
+    asked: "How much can retail investors invest each year through our crowdfunding platform?"
+    why: "Payment method vs investment limits: different rules."
+  - id: neg-confirmation-vs-statement
+    kind: negative
+    cached: "What is the deadline for sending a confirmation note after executing a client's transaction?"
+    asked: "What is the deadline for sending a periodic statement to a client?"
+    why: "Confirmation notes vs periodic statements."
+  - id: neg-appointments-ami
+    kind: negative
+    cached: "Which appointments must every Authorised Firm make?"
+    asked: "Which appointments must every Authorised Market Institution make?"
+    why: "Authorised Firms and Authorised Market Institutions have different mandatory appointments."
+  - id: neg-mlro-vs-compliance-officer
+    kind: negative
+    cached: "Who must we appoint as MLRO and does that person have to live in the UAE?"
+    asked: "Who must we appoint as Compliance Officer and does that person have to live in the UAE?"
+    why: "Different Licensed Functions with their own requirements."
+  - id: neg-sponsor-vs-prospectus
+    kind: negative
+    cached: "Can the DFSA require an issuer making a Prospectus Offer to appoint a sponsor?"
+    asked: "Can the DFSA require an issuer making a Prospectus Offer to appoint a compliance adviser?"
+    why: "Sponsors and compliance advisers are different roles under different rules."
