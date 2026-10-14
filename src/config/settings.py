@@ -163,11 +163,27 @@ class RetrievalSettings(BaseSettings):
     # bge-reranker-base) on a machine without one.
     rerank_k: int = 40
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    # Pinned Hugging Face commits of the rerankers we use, so a model can't change
+    # under the eval results. A model not listed here loads its latest commit (logged).
+    reranker_revisions: dict[str, str] = Field(
+        default_factory=lambda: {
+            "BAAI/bge-reranker-v2-m3": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+            "BAAI/bge-reranker-base": "2cfc18c9415c912f9d8155881c133215df768a70",
+        }
+    )
+    # Load the reranker from the local Hugging Face cache only: no request to the Hub
+    # at startup, and it works offline. Set false once to download a model (or a
+    # newly pinned commit) that isn't cached yet.
+    reranker_local_only: bool = True
     reranker_max_length: int = 512  # tokens of (question, chunk); longer pairs are cut
     reranker_batch_size: int = 16
     reranker_device: str | None = None  # None: "cuda" if a GPU is available, else "cpu"
     reranker_fp16: bool = True  # half precision, on a GPU only
     top_n: int = 6
+
+    @property
+    def reranker_revision(self) -> str | None:
+        return self.reranker_revisions.get(self.reranker_model)
 
     # The top reranker score is the confidence signal. None = not calibrated yet:
     # Phase H calibrates it on the golden set. Never guess it.
@@ -239,8 +255,24 @@ class LangfuseSettings(BaseSettings):
 class ChatSettings(BaseSettings):
     model_config = _section("CHAT_")
 
-    # Number of recent turns used for query rewriting and answer context.
+    # Recent messages (one turn = one message) used for query rewriting and answer
+    # context. Loaded from SQLite, never taken from the client.
     history_turns: int = 6
+    # Each history message is cut to this many characters, to bound token cost.
+    history_max_chars: int = 1500
+    # A longer user message is rejected (422).
+    max_message_chars: int = 2000
+
+
+class ApiSettings(BaseSettings):
+    """FastAPI. Every endpoint except /health needs the X-API-Key header."""
+
+    model_config = _section("API_")
+
+    key: SecretStr | None = None  # API_KEY
+    # Without a key the app refuses to start, unless this is set (local experiments).
+    # Bind it to 127.0.0.1: uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+    auth_disabled: bool = False
 
 
 class PathSettings(BaseModel):

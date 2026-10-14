@@ -385,4 +385,4 @@ uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # produc
 - **ClickHouse system logs**: 503 MB was written in the first 30 minutes, which includes the migrations, so the idle rate is not measured yet. Check the volume size after a few days with `docker system df -v`. A config file mounted into `/etc/clickhouse-server/config.d/` can disable or shorten (TTL) `query_log`, `metric_log`, `trace_log`, etc. Not done yet.
 - web and worker have no healthcheck in compose. `/api/public/health` (web) and the worker's internal port 3030 could be used.
 - SDK media uploads don't work, because MinIO has no host port. Text-only tracing doesn't need them.
-- No prompt has a `production` version yet: all five are `staging` v1. Promote them once Phase F has tried them (`--skip-gate`), or after Phase H's first eval run.
+- All five prompts were promoted to `production` at the end of Phase F with `--skip-gate`; from Phase H on, promotion needs a passing eval run.

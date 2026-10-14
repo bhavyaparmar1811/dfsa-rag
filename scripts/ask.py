@@ -1,14 +1,15 @@
-"""Ask one question: retrieve, answer (or refuse), and show the sources.
+"""Ask a question in a conversation: rewrite, retrieve, answer (or refuse), store.
 
     uv run python -m scripts.ask "Do we need a Client Agreement with a Market Counterparty?"
+    uv run python -m scripts.ask "what about retail clients?" --conversation <id>
     uv run python -m scripts.ask "What is a Retail Client?" --label staging
     uv run python -m scripts.ask "customer due diligence" --module AML --json
     uv run python -m scripts.ask "..." --chunk-type guidance   # Guidance only (labelled answer)
 
-One Langfuse trace per question: a retriever observation (with the query
-embedding's usage and cost) and the answer step (generation + citation check).
-Costs one query embedding and, unless the gate refuses, one GPT-4o call
-(about $0.01-0.02).
+Goes through ChatService (the same path as the API): history comes from SQLite,
+every turn is stored with its trace, and Langfuse gets one trace per turn,
+grouped by conversation. A turn costs one query embedding and up to two GPT-4o
+calls (rewrite on follow-ups, answer unless the gate refuses), about $0.01-0.03.
 """
 
 import argparse
@@ -17,100 +18,67 @@ import logging
 import sys
 import textwrap
 
-from src.config.settings import AzureOpenAISettings, EmbeddingSettings, RetrievalSettings
-from src.generation.answer import Answerer
-from src.generation.llm import LLMClient
-from src.observability.langfuse import get_langfuse
-from src.prompts.registry import PromptRegistry
+from src.chat.service import ChatService
 from src.retrieval.models import Filters
-from src.retrieval.pipeline import Retriever
+from src.storage.db import assert_migrated
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Answer one question, with citations.")
+    ap = argparse.ArgumentParser(description="Answer a question, with citations.")
     ap.add_argument("question")
+    ap.add_argument("--conversation", help="continue this conversation (default: a new one)")
     ap.add_argument("--label", help="prompt label (default: production)")
     ap.add_argument("--module", action="append", help="filter; repeatable (AML, REG_LAW, ...)")
-    ap.add_argument("--binding-only", action="store_true")
     ap.add_argument("--chunk-type", action="append", help="filter: rule, guidance, definition, ...")
-    ap.add_argument("--json", action="store_true", help="print the answer trace as JSON")
+    ap.add_argument("--binding-only", action="store_true")
+    ap.add_argument("--json", action="store_true", help="print the stored trace as JSON")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
-    retriever = Retriever.build(RetrievalSettings())
-    answerer = Answerer(
-        LLMClient(AzureOpenAISettings()), PromptRegistry.from_settings(), retriever.citations.find
-    )
+    service = ChatService.build()
+    assert_migrated(service.engine)
+    conversation = args.conversation or service.create_conversation().id
     filters = Filters(
         modules=args.module, chunk_types=args.chunk_type, binding_only=args.binding_only
     )
-    langfuse, emb = get_langfuse(), EmbeddingSettings()
-
-    with langfuse.start_as_current_observation(
-        name="ask", as_type="span", input={"question": args.question}
-    ) as root:
-        with langfuse.start_as_current_observation(
-            name="retrieve", as_type="retriever", input={"question": args.question}
-        ) as obs:
-            retrieval = retriever.retrieve(args.question, filters)
-            with langfuse.start_as_current_observation(
-                name="embed-query",
-                as_type="embedding",
-                model=emb.model,
-                usage_details={"input": retrieval.embed_tokens},
-                cost_details={"input": retrieval.embed_cost_usd},
-            ):
-                pass
-            obs.update(
-                output={
-                    "hits": [h.key for h in retrieval.hits],
-                    "context": [b.key for b in retrieval.context],
-                },
-                metadata={
-                    "confidence": retrieval.confidence,
-                    "confident": retrieval.confident,
-                    "trace": retrieval.trace(),
-                },
-            )
-        result = answerer.answer(retrieval, label=args.label)
-        root.update(output={"status": result.status, "text": result.text})
-        trace_url = langfuse.get_trace_url(trace_id=langfuse.get_current_trace_id())
-    langfuse.flush()
+    turn = service.send(conversation, args.question, filters, label=args.label)
+    answer, retrieval = turn.answer, turn.retrieval
 
     if args.json:
-        print(json.dumps(result.trace(), indent=2, ensure_ascii=False))
+        trace = service.get_trace(turn.trace_id)
+        row = {c.name: getattr(trace, c.name) for c in trace.__table__.columns}
+        print(json.dumps(row, indent=2, ensure_ascii=False, default=str))
         return 0
 
     conf = "n/a" if retrieval.confidence is None else f"{retrieval.confidence:.3f}"
+    print(f"Conversation: {conversation}")
     print(f"Question: {args.question}")
-    print(
-        f"Retrieval: confidence {conf}, gate {result.gate}, {len(retrieval.context)} blocks, "
-        f"{retrieval.context_tokens} tokens"
-    )
-    if result.refused:
-        print(f"\nREFUSED ({result.refusal.code})")
+    if turn.rewrite.changed:
+        print(f"Rewritten: {turn.rewrite.question}")
+    elif turn.rewrite.fallback_reason:
+        print(f"Rewrite discarded: {turn.rewrite.fallback_reason}")
+    print(f"Retrieval: confidence {conf}, gate {answer.gate}, {len(retrieval.context)} blocks, "
+          f"{retrieval.context_tokens} tokens")  # fmt: skip
+    if answer.refused:
+        print(f"\nREFUSED ({answer.refusal.code})")
     print()
-    for para in result.text.split("\n"):
+    for para in answer.text.split("\n"):
         print(textwrap.fill(para, 100) if para else "")
-    if result.cited:
+    if answer.cited:
         print("\nSources:")
-        for c in result.cited:
+        for c in answer.cited:
             print(f"  [{c.context_id}] {c.citation:<32} {c.label}")
-    if result.violations:
-        print(f"\nViolations: {result.violations}")
-    for p in result.prompts:
+    if answer.violations:
+        print(f"\nViolations: {answer.violations}")
+    prompts = ([turn.rewrite.prompt] if turn.rewrite.prompt else []) + answer.prompts
+    for p in prompts:
         version = f"v{p['version']}" if p["version"] else "git copy"
-        print(f"\nPrompt: {p['name']} {p['label']} {version} ({p['source']}, {p['hash'][:12]})")
-    cost = retrieval.embed_cost_usd + result.cost_usd
-    llm = result.llm
-    tokens = f"{llm.input_tokens} in / {llm.output_tokens} out" if llm else "no LLM call"
-    print(
-        f"Cost: ${cost:.6f} ({tokens}); latency: retrieve {retrieval.timings_ms['total']:.0f} ms"
-        f", answer {result.timings_ms['total']:.0f} ms"
-    )
-    if trace_url:
-        print(f"Trace: {trace_url}")
+        print(f"Prompt: {p['name']} {p['label']} {version} ({p['source']}, {p['hash'][:12]})")
+    stages = ", ".join(f"{k} {v:.0f} ms" for k, v in turn.latency_ms.items())
+    print(f"Cost: ${turn.cost_usd:.6f}; latency: {stages}")
+    print(f"Trace: {turn.trace_url or turn.trace_id}")
+    print(f'\nFollow up: uv run python -m scripts.ask "..." --conversation {conversation}')
     return 0
 
 

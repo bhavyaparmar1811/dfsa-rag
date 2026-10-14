@@ -17,8 +17,8 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | C | Storage (SQLite + Qdrant) and embedding | ✅ |
 | D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ✅ |
 | E | Langfuse: self-hosted tracing and prompt store | ✅ |
-| F | Generation, grounding and refusal | 🔄 |
-| G | Chat history, query rewriting, FastAPI | ⬜ |
+| F | Generation, grounding and refusal | ✅ |
+| G | Chat history, query rewriting, FastAPI | ✅ |
 | H | Evaluation: golden set, metrics, LLM judges, release gate | ⬜ |
 | I | Cost reporting, docs, polish | ⬜ |
 | J | VARA as a second regulator | ⏸ |
@@ -377,9 +377,9 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **Finding:** `update_prompt(new_labels=…)` adds labels rather than replacing them.
 - `pytest` (260 offline + 36 corpus) and `ruff check` are green.
 
-**Not done in Phase E, on purpose:** no prompt has a `production` version yet. Promote them when Phase F has tried them, or after the first eval run (Phase H).
+**Not done in Phase E, on purpose:** no prompt had a `production` version yet; they were promoted at the end of Phase F.
 
-## Phase F: Generation, grounding and refusal 🔄
+## Phase F: Generation, grounding and refusal ✅
 **Flow:** `gate (no context / below threshold: refuse, no LLM call) → answer prompt over numbered blocks (JSON) → citation check → answer, or the refusal prompt with a reason`
 
 | Step | What | Files |
@@ -417,16 +417,39 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 - **Findings for Phase H:** the VAT question's top rerank score was 0.003 against 0.78–0.999 for answerable ones, so a calibrated threshold would refuse it before the LLM (it cost the most, $0.032: its 6 unrelated hits were 11.8k tokens, and hits are never cut by the budget). Retrieval takes 2–5 s, the answer 4–5 s.
 - `pytest` (301 offline + 36 corpus) and `ruff check` are green.
 
-**Still open in Phase F:** promote the five prompts to `production` (`--skip-gate "Phase F manual checkpoint"`) after review.
+**Prompts promoted (2026-10-14)**, after review of the checkpoint answers, with `--skip-gate "Phase F manual checkpoint"`: `answer` v2, `refusal`, `query-rewrite`, `judge-faithfulness` and `judge-relevance` v1 are `production`; the drift check reports all five `in-sync`. From Phase H on, a promotion needs a passing eval run instead.
 
-## Phase G: Chat history, query rewriting, API ⬜
+## Phase G: Chat history, query rewriting, API ✅
+**One turn:** `history (SQLite, last 6 messages) → rewrite (follow-ups only) → retrieve → answer → user + assistant message + trace row, in one transaction`
+
 | Step | What | Files |
 |---|---|---|
-| G1 | Alembic 0002: `conversations`, `messages` (rewritten query, cited chunk ids, trace_id, tokens, cost, latency) and a slim `traces` row (Langfuse trace id, candidates and reranked results with scores, prompt name/version/source, tokens and cost per stage, refused flag) | `src/storage/models.py`, migration |
-| G2 | Rewriting follow-up questions using the last 6 turns, loaded **from SQLite, never from the client**; the original and rewritten queries are both logged | `src/chat/rewrite.py` |
-| G3 | `ChatService`: rewrite → retrieve → answer, one Langfuse trace per request (session = conversation), writes messages and the trace row | `src/chat/service.py` |
-| G4 | FastAPI: `POST /conversations`, `POST /conversations/{id}/messages`, `GET /conversations/{id}`, `GET /traces/{id}`, `GET /health`, `GET /stats/cost`. At startup: load the reranker, check embedding and sparse compatibility, check prompt drift | `src/api/` |
-| G5 | `scripts/ask.py` command and API tests | `scripts/`, `tests/api/` |
+| ✅ G1 | Alembic 0002: `conversations`, `messages` (rewritten query, status and refusal code, cited chunks, trace_id, tokens, cost, latency) and the slim `traces` row (id = Langfuse trace id; retrieval and answer traces as JSON; tokens and $ per stage: embedding, rewrite, answer; latency per stage; `status` ok/error). Repositories for each, plus `cost_stats()` | `src/storage/models.py`, `src/storage/migrations/versions/0002_chat_tables.py`, `src/storage/repositories.py` |
+| ✅ G2 | Follow-ups rewritten with the `query-rewrite` prompt over the last 6 messages, loaded **from SQLite, never from the client**; no LLM call on a first message; an empty or cut-off rewrite falls back to the original; both are stored | `src/chat/rewrite.py` |
+| ✅ G3 | `ChatService.send`: one Langfuse trace per turn (`chat-turn` → `rewrite-query` → `retrieve`/`embed-query` → `answer`/`generate-answer`/`validate-citations`), session = conversation; the trace id is created up front, so SQLite and Langfuse share it even with tracing off; a failed turn stores an error trace and no messages | `src/chat/service.py` |
+| ✅ G4 | FastAPI with `X-API-Key` on every endpoint but `/health`; startup checks the migration, loads the reranker, checks the index, logs prompt drift; 404 / 422 (a `history` field is rejected) / 503 for an upstream outage, with the trace id | `src/api/app.py`, `src/api/schemas.py` |
+| ✅ G5 | `scripts/ask.py` goes through `ChatService` (`--conversation` to follow up); 30 tests: repositories via the service, rewrite, service, API | `scripts/ask.py`, `tests/chat/`, `tests/api/` |
+
+**Decisions made while building it:**
+- **The answer gets the rewritten question**, with the history beside it for context; retrieval and the citation router use the rewritten one too.
+- **A turn is one message**: `CHAT_HISTORY_TURNS=6` is the last 6 messages, each cut to 1,500 characters.
+- **`GET /traces/{id}` reads SQLite**, not Langfuse (v4's legacy trace endpoint answers 404), and adds the Langfuse URL.
+- **Outage vs bug:** Azure OpenAI, OpenAI and Qdrant errors are 503 (retry); anything else is 500. Both store an error trace.
+- **Retrieval runs one at a time** (a lock around the GPU reranker); FastAPI runs the sync endpoints in its thread pool.
+- **The reranker is pinned and loaded offline:** `bge-reranker-v2-m3` at commit `953dc6f6…` (`bge-reranker-base` at `2cfc18c9…`), from the local Hugging Face cache only (`RETRIEVAL_RERANKER_LOCAL_ONLY=true`). Startup makes no Hub request (that was the "unauthenticated requests" warning), works offline, and eval results can't shift because the model changed upstream. The revision is in every retrieval trace and in `/health`; an uncached model fails with a hint to download it once.
+- **Langfuse is optional at runtime:** `/health` reports it, but only the database, Qdrant and the reranker make the app `degraded`.
+
+**Checkpoint results (2026-10-14):** `data/app.db` migrated 0001 → 0002 (backup taken first); the 4,060 chunks are untouched.
+- `ask.py`, two turns:
+  - turn 1, "Do we need a Client Agreement with a Market Counterparty?": answered "No" with COB 3.3.1 and 3.3.2, $0.0193, 8.1 s;
+  - turn 2, "what about retail clients?": rewritten to "Is a Client Agreement required when dealing with Retail Clients under DFSA regulation?", answered from COB 3.3.2 and COB A2.1.2, $0.0170, 8.3 s (rewrite 2.1 s, retrieve 2.3 s, answer 3.8 s).
+- Langfuse: both traces under one session; the rewrite is its own generation (276 in / 15 out, $0.0008), linked to `query-rewrite` v1.
+- API (uvicorn, 127.0.0.1:8000):
+  - `/health` 200 without a key (Qdrant 3,397 points, reranker on cuda, Langfuse 4.57.0); `POST /conversations` without a key → 401;
+  - "What is a Retail Client?" → GLO Retail Client + COB 2.3.2; "and what is the alternative classification?" → rewritten, answered from COB 2.3.1 and 2.3.2;
+  - a `history` field → 422; `GET /traces/{id}` returns 40 candidates with scores, the prompts used and the Langfuse URL;
+  - `/stats/cost`: 4 requests, $0.0695 in total, $0.0174 per request (answer $0.0679, rewrite $0.0017, embeddings $0.000001).
+- `pytest` (322 offline + 36 corpus) and `ruff check` are green.
 
 ## Phase H: Evaluation ⬜
 | Step | What | Files |
@@ -492,6 +515,8 @@ uv run python -m scripts.check_langfuse                # keys, a trace round tri
 uv run python -m scripts.sync_prompts [--dry-run] [name ...]   # git prompts -> Langfuse staging
 uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # staging -> production
 uv run python -m scripts.ask "Do we need a Client Agreement with a Market Counterparty?" [--label staging] [--json]
+uv run python -m scripts.ask "what about retail clients?" --conversation <id>   # a follow-up
+uv run uvicorn src.api.app:app --host 127.0.0.1 --port 8000      # the API (needs API_KEY in .env)
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

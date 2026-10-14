@@ -45,18 +45,33 @@ class CrossEncoderModel:
         # Half precision on a GPU: half the memory (v2-m3 is ~1.1 GB instead of ~2.3 GB)
         # and tensor cores. CPUs gain nothing from it, so they stay in float32.
         half = cfg.reranker_fp16 and self.device.startswith("cuda")
-        self.model = CrossEncoder(
-            cfg.reranker_model,
-            max_length=cfg.reranker_max_length,
-            device=self.device,
-            activation_fn=torch.nn.Sigmoid(),
-            model_kwargs={"dtype": torch.float16} if half else None,
-        )
+        self.revision = cfg.reranker_revision
+        if self.revision is None:
+            logger.warning("reranker %s has no pinned revision: loading its latest commit",
+                           self.name)  # fmt: skip
+        try:
+            self.model = CrossEncoder(
+                cfg.reranker_model,
+                revision=self.revision,
+                local_files_only=cfg.reranker_local_only,
+                max_length=cfg.reranker_max_length,
+                device=self.device,
+                activation_fn=torch.nn.Sigmoid(),
+                model_kwargs={"dtype": torch.float16} if half else None,
+            )
+        except OSError as e:
+            if not cfg.reranker_local_only:
+                raise
+            raise RuntimeError(
+                f"Reranker {self.name} @ {self.revision or 'latest'} is not in the local "
+                "Hugging Face cache. Download it once with RETRIEVAL_RERANKER_LOCAL_ONLY=false."
+            ) from e
         self.tokenizer = self.model.tokenizer
         self.dtype = str(next(self.model.parameters()).dtype).removeprefix("torch.")
         logger.info(
-            "Loaded reranker %s on %s (%s) in %.1f s",
-            self.name, self.device, self.dtype, time.perf_counter() - start,
+            "Loaded reranker %s @ %s on %s (%s) in %.1f s",
+            self.name, (self.revision or "latest")[:12], self.device, self.dtype,
+            time.perf_counter() - start,
         )  # fmt: skip
 
     def score(self, question: str, texts: list[str]) -> list[float]:

@@ -154,7 +154,8 @@ class Retriever:
         """Where the reranker actually runs, for the trace (the config only says "auto")."""
         model = self.reranker.model if self.reranker else None
         return {"reranker_device": getattr(model, "device", None),
-                "reranker_dtype": getattr(model, "dtype", None)}  # fmt: skip
+                "reranker_dtype": getattr(model, "dtype", None),
+                "reranker_revision": getattr(model, "revision", None)}  # fmt: skip
 
 
 def _select(candidates: list[Candidate], top_n: int) -> list[Candidate]:

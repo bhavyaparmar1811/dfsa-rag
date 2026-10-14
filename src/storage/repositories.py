@@ -1,4 +1,4 @@
-"""Reads and writes for the ingestion tables. The rest of the app never touches
+"""Reads and writes for the ingestion and chat tables. The rest of the app never touches
 the ORM models directly, so the storage backend can change behind this file.
 
 Each repository wraps a `Session` and never commits: the caller decides the
@@ -15,7 +15,17 @@ from sqlalchemy.orm import Session
 from src.ingestion.diff import StoredChunk
 from src.ingestion.manifest import ManifestEntry
 from src.ingestion.models import Chunk
-from src.storage.models import ChunkRef, ChunkRow, ChunkTerm, Document, IngestionRun, utcnow
+from src.storage.models import (
+    ChunkRef,
+    ChunkRow,
+    ChunkTerm,
+    Conversation,
+    Document,
+    IngestionRun,
+    Message,
+    Trace,
+    utcnow,
+)
 
 
 class DocumentRepository:
@@ -316,3 +326,97 @@ class IngestionRunRepository:
 
     def latest(self) -> IngestionRun | None:
         return self.s.scalar(select(IngestionRun).order_by(IngestionRun.id.desc()).limit(1))
+
+
+# --- chat ---------------------------------------------------------------------
+
+
+class ConversationRepository:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def create(self, conversation_id: str, title: str = "") -> Conversation:
+        conv = Conversation(id=conversation_id, title=title)
+        self.s.add(conv)
+        self.s.flush()
+        return conv
+
+    def get(self, conversation_id: str) -> Conversation | None:
+        return self.s.get(Conversation, conversation_id)
+
+    def touch(self, conv: Conversation, title: str | None = None) -> None:
+        """Mark it updated, and give it a title if it has none yet."""
+        if title and not conv.title:
+            conv.title = title
+        conv.updated_at = utcnow()
+
+    def recent_messages(self, conversation_id: str, n: int) -> list[Message]:
+        """The last `n` messages, oldest first."""
+        rows = self.s.scalars(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.id.desc())
+            .limit(n)
+        )
+        return list(rows)[::-1]
+
+    def messages(self, conversation_id: str) -> list[Message]:
+        query = select(Message).where(Message.conversation_id == conversation_id)
+        return list(self.s.scalars(query.order_by(Message.id)))
+
+
+class MessageRepository:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def add(self, message: Message) -> Message:
+        self.s.add(message)
+        self.s.flush()
+        return message
+
+
+class TraceRepository:
+    def __init__(self, session: Session):
+        self.s = session
+
+    def add(self, trace: Trace) -> Trace:
+        self.s.add(trace)
+        self.s.flush()
+        return trace
+
+    def get(self, trace_id: str) -> Trace | None:
+        return self.s.get(Trace, trace_id)
+
+    def cost_stats(self) -> dict:
+        """Totals over all requests, and per day: requests, refusals, errors, $ by stage."""
+        cols = (
+            func.count(),
+            func.coalesce(func.sum(Trace.refused.cast(Integer)), 0),
+            func.coalesce(func.sum((Trace.status == "error").cast(Integer)), 0),
+            func.coalesce(func.sum(Trace.embed_cost_usd), 0.0),
+            func.coalesce(func.sum(Trace.rewrite_cost_usd), 0.0),
+            func.coalesce(func.sum(Trace.answer_cost_usd), 0.0),
+            func.coalesce(func.sum(Trace.total_cost_usd), 0.0),
+        )
+        day = func.date(Trace.created_at)
+
+        def row(values) -> dict:
+            n, refused, errors, embed, rewrite, answer, total = values
+            answered = n - errors
+            return {
+                "requests": n,
+                "refused": refused,
+                "errors": errors,
+                "refusal_rate": round(refused / answered, 4) if answered else None,
+                "cost_usd": {
+                    "embedding": round(embed, 6),
+                    "rewrite": round(rewrite, 6),
+                    "answer": round(answer, 6),
+                    "total": round(total, 6),
+                },
+                "cost_per_request_usd": round(total / n, 6) if n else None,
+            }
+
+        totals = row(self.s.execute(select(*cols)).one())
+        by_day = self.s.execute(select(day, *cols).group_by(day).order_by(day)).all()
+        return totals | {"by_day": [{"day": d} | row(rest) for d, *rest in by_day]}

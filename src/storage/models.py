@@ -1,8 +1,12 @@
-"""SQLite tables for the ingested corpus (Alembic migration 0001).
+"""SQLite tables: the ingested corpus (migration 0001) and the chat (0002).
 
     documents 1 ──< chunks >── chunk_refs     what each chunk references
                        └────── chunk_terms    which Defined Terms it uses
     ingestion_runs                            one row per ingest: counts, tokens, $
+
+    conversations 1 ──< messages              user and assistant turns
+    traces                                    one row per chat request (= its Langfuse
+                                              trace id): retrieval, answer, cost, latency
 
 SQLite is the system of record: it holds every chunk, including the ones that
 are never embedded (section parents, rules that were split into parts, deleted
@@ -153,3 +157,80 @@ class IngestionRun(Base):
     chunks_removed: Mapped[int] = mapped_column(Integer, default=0)
     embed_tokens: Mapped[int] = mapped_column(Integer, default=0)
     embed_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # uuid4
+    title: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    messages: Mapped[list["Message"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, order_by="Message.id"
+    )
+
+
+class Message(Base):
+    """One turn. A user turn keeps its rewritten query; an assistant turn keeps
+    what it cited and the trace that produced it, so any past answer can be
+    audited back to the exact rules and retrieval behind it."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String)  # user | assistant
+    content: Mapped[str] = mapped_column(Text)
+    rewritten_query: Mapped[str | None] = mapped_column(Text)  # user turns
+    status: Mapped[str | None] = mapped_column(String)  # assistant: answered | refused
+    refusal_code: Mapped[str | None] = mapped_column(String)
+    cited: Mapped[list[dict]] = mapped_column(JSON, default=list)  # chunk_id, key, citation, label
+    trace_id: Mapped[str | None] = mapped_column(String, index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Trace(Base):
+    """The audit record of one chat request; Langfuse is where you look at it.
+    Its id is the Langfuse trace id. Kept when its conversation is deleted."""
+
+    __tablename__ = "traces"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    status: Mapped[str] = mapped_column(String)  # ok | error
+    error: Mapped[str | None] = mapped_column(Text)
+    original_query: Mapped[str] = mapped_column(Text)
+    rewritten_query: Mapped[str | None] = mapped_column(Text)
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    retrieval: Mapped[dict | None] = mapped_column(JSON)  # RetrievalResult.trace()
+    answer: Mapped[dict | None] = mapped_column(JSON)  # AnswerResult.trace()
+    rewrite: Mapped[dict | None] = mapped_column(JSON)  # prompt, LLM usage, output
+    refused: Mapped[bool | None] = mapped_column(Boolean)
+    refusal_code: Mapped[str | None] = mapped_column(String)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # tokens and $ per stage (embeddings: OpenAI; rewrite and answer: Azure GPT-4o)
+    embed_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    embed_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    rewrite_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    rewrite_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    rewrite_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    answer_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    answer_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    answer_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    latency_ms: Mapped[dict] = mapped_column(JSON, default=dict)  # per stage + total
