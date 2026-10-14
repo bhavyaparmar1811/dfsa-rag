@@ -17,7 +17,7 @@ The stack is fixed in CLAUDE.md: Azure OpenAI GPT-4o, OpenAI `text-embedding-3-s
 | C | Storage (SQLite + Qdrant) and embedding | ✅ |
 | D | Retrieval: hybrid search, citation lookup, rerank, parent expansion | ✅ |
 | E | Langfuse: self-hosted tracing and prompt store | ✅ |
-| F | Generation, grounding and refusal | ⬜ |
+| F | Generation, grounding and refusal | 🔄 |
 | G | Chat history, query rewriting, FastAPI | ⬜ |
 | H | Evaluation: golden set, metrics, LLM judges, release gate | ⬜ |
 | I | Cost reporting, docs, polish | ⬜ |
@@ -379,14 +379,45 @@ uv run python -m scripts.retrieve "Do we need a Client Agreement with a Market C
 
 **Not done in Phase E, on purpose:** no prompt has a `production` version yet. Promote them when Phase F has tried them, or after the first eval run (Phase H).
 
-## Phase F: Generation, grounding and refusal ⬜
+## Phase F: Generation, grounding and refusal 🔄
+**Flow:** `gate (no context / below threshold: refuse, no LLM call) → answer prompt over numbered blocks (JSON) → citation check → answer, or the refusal prompt with a reason`
+
 | Step | What | Files |
 |---|---|---|
-| F1 | Azure GPT-4o wrapper; each call is a Langfuse generation linked to its prompt version, with usage and cost passed explicitly (Azure deployment names don't map to Langfuse's price table) | `src/generation/llm.py` |
-| F2 | **Confidence gate**: below `refusal_threshold`, return the refusal without calling the LLM | `src/generation/answer.py` |
-| F3 | The answer prompt gets numbered context blocks labelled binding Rule / non-binding Guidance / definition / Law article, and returns JSON `{answer, citations:[{context_id, citation}], confident}` | `prompts/answer.yaml` |
-| F4 | **Citation validator**: every cited block must be in the context; every rule-like number in the answer must be among the cited chunks; an answer supported only by Guidance must say so; any violation means refusal, never a patched answer | `src/generation/citations.py` |
-| F5 | Tests: refusal path, fabricated citation rejected, Guidance-only answer labelled | `tests/generation/` |
+| ✅ F1 | Azure GPT-4o wrapper: prompt `config` mapped through an allow-list (a typo fails loudly); each call is a Langfuse generation linked to its prompt version, with usage and cost passed explicitly (Azure deployment names don't map to Langfuse's price table); API errors are raised, never turned into refusals | `src/generation/llm.py` |
+| ✅ F2 | **Confidence gate**: no context, or `confident is False`, refuses without calling the LLM; `None` (threshold not calibrated yet) runs the LLM and is recorded as gate `uncalibrated`. `AnswerResult.trace()` holds everything Phase G stores | `src/generation/answer.py` |
+| ✅ F3 | Numbered context blocks `[n] CITATION \| Label (binding/non-binding)` + heading + text; Guidance shown as `COB 3.3.2 Guidance` (a rule and its Guidance share a citation). JSON `{answer, citations:[{context_id, citation}], confident}`; answer prompt v2 | `src/generation/context.py`, `prompts/answer.yaml` |
+| ✅ F4 | **Citation validator**: at least one citation; every listed block exists and has that citation; every provision the answer names is a listed block **or a reference quoted from one**; model not confident, cut off, filtered or malformed → refusal, never a patched answer. All-Guidance answers get a fixed notice from the code | `src/generation/citations.py` |
+| ✅ F5 | 41 tests: refusal paths (0 LLM calls at the gate), fabricated and unlisted citations, relayed references, Guidance-only label, LLM wrapper, end to end on the mini corpus | `tests/generation/` |
+| ✅ | `scripts/ask.py`: one question, one Langfuse trace (retriever → embedding → answer chain → generation → citation check) | `scripts/ask.py` |
+
+**Decisions made while building it:**
+- **Guidance-only answers are labelled by the code** (fixed notice before the text), not by checking the answer's wording: deterministic, and never a refusal over phrasing.
+- **Relayed references are allowed.** "What does COB 3.3.2 require?" was first refused: the draft repeated "App2" and "Rule 3.3.4", which COB 3.3.2's own text names but which weren't context blocks. A mention now passes if a listed block's text refers to it (resolved in that block's module, so "GEN 3.3.4" doesn't pass for COB's "Rule 3.3.4"). No number ever comes from the model itself; the trace lists such mentions as `relayed`.
+- **An outage is an error, not a refusal.** "No confident answer" would misdescribe it; Phase G's API returns 503.
+- **The refusal names unresolved citations** from the question ("COB 99.9.9 is not in the documents I can search").
+- **JSON mode, not structured outputs**, for now. The deployment runs `gpt-4o-2024-11-20`, which supports strict `json_schema`; worth switching if malformed output shows up in evals.
+
+**Checkpoint results (2026-10-14):** `answer` staging v2, deployment `gpt-4o-poc` (`gpt-4o-2024-11-20`).
+
+| Question | Result | Cost | Answer step |
+|---|---|---|---|
+| Do we need a Client Agreement with a Market Counterparty? | Answered "No": COB 3.3.1 (scope), COB 3.3.2, two GLO definitions | $0.0194 | 4.5 s |
+| What does COB 3.3.2 require? | Answered from COB 3.3.2, App2 and Rule 3.3.4 relayed (refused before the relay rule) | $0.0155 | 4.7 s |
+| What is a Retail Client? | Answered: GLO Retail Client, COB 2.3.2 | $0.0128 | 3.8 s |
+| What does Article 20 of the Regulatory Law say? | Answered: Regulatory Law Art. 20 | $0.0140 | 5.2 s |
+| Can a firm give the key information in a separate form …? (`--chunk-type guidance`) | Answered with the Guidance-only notice: COB 3.3.2 Guidance | $0.0191 | 3.9 s |
+| Should a Client Agreement be in writing? (Guidance only) | Refused, `model_not_confident`: the Guidance only partly covers it | $0.0186 | 4.0 s |
+| What is the VAT rate in the UAE? | Refused, `model_not_confident` (retrieval confidence 0.003) | $0.0318 | 4.2 s |
+| What does COB 99.9.9 require? | Refused, names COB 99.9.9 as not in the corpus | $0.0185 | 3.8 s |
+| Client Agreement question, `RETRIEVAL_REFUSAL_THRESHOLD=0.99` | Refused at the gate, **no LLM call** | $0.0000 | 30 ms |
+
+- Langfuse: the generation is linked to `answer` v2, with usage (7,008 in / 159 out) and cost ($0.0191) as sent.
+- An answer costs about $0.013–0.020, almost all of it GPT-4o input (4.5–7k tokens of context).
+- **Findings for Phase H:** the VAT question's top rerank score was 0.003 against 0.78–0.999 for answerable ones, so a calibrated threshold would refuse it before the LLM (it cost the most, $0.032: its 6 unrelated hits were 11.8k tokens, and hits are never cut by the budget). Retrieval takes 2–5 s, the answer 4–5 s.
+- `pytest` (301 offline + 36 corpus) and `ruff check` are green.
+
+**Still open in Phase F:** promote the five prompts to `production` (`--skip-gate "Phase F manual checkpoint"`) after review.
 
 ## Phase G: Chat history, query rewriting, API ⬜
 | Step | What | Files |
@@ -460,6 +491,7 @@ curl.exe -s http://127.0.0.1:3000/api/public/health    # Langfuse; UI at http://
 uv run python -m scripts.check_langfuse                # keys, a trace round trip, prompt drift
 uv run python -m scripts.sync_prompts [--dry-run] [name ...]   # git prompts -> Langfuse staging
 uv run python -m scripts.promote_prompt answer --skip-gate "<reason>"   # staging -> production
+uv run python -m scripts.ask "Do we need a Client Agreement with a Market Counterparty?" [--label staging] [--json]
 uv run python -m scripts.check_qdrant
 uv run alembic upgrade head
 uv run python -m src.ingestion.chunk_corpus            # chunk to JSONL + reports

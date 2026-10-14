@@ -42,6 +42,10 @@ class AzureOpenAISettings(BaseSettings):
         validation_alias=AliasChoices("AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT_NAME"),
     )
 
+    # The OpenAI SDK retries rate limits, timeouts and 5xx errors itself, with backoff.
+    max_retries: int = 3
+    timeout_s: float = 60.0
+
     # USD per 1M tokens, used for cost logging. Check against your Azure pricing.
     input_cost_per_1m: float = 2.50
     output_cost_per_1m: float = 10.00
