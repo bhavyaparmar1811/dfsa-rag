@@ -1,6 +1,6 @@
 # Architecture
 
-How the DFSA compliance assistant is put together: the components, one request end to end, the data model, and how each part fails. The [README](../README.md) is the overview; [ROADMAP.MD](ROADMAP.MD) is the build log with the findings and decisions behind each phase; [WRITEUP.md](WRITEUP.md) is the case study.
+How the DFSA compliance assistant is put together: the components, one request end to end, the data model, and how each part fails. The [README](../README.md) is the overview; [WRITEUP.md](WRITEUP.md) is the case study.
 
 ---
 
