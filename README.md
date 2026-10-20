@@ -10,6 +10,9 @@ A production-style retrieval-augmented generation (RAG) system, built end to end
  Rulebook content © Dubai Financial Services Authority. 
 ---
 
+https://github.com/user-attachments/assets/b7a6d65a-6e2e-4ae3-8fdd-a7a67e39117b
+
+
 ## What it does
 
 In compliance work, a wrong or unsupported answer is worse than no answer. So the requirement is precision: retrieve the right provision, cite it exactly, and refuse when the evidence isn't there.
