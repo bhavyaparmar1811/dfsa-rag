@@ -1,15 +1,4 @@
-# Golden eval set (Phase H). Schema and rules: src/eval/golden.py.
-#
-#   uv run python -m src.eval.golden --check
-#
-# gold:        provisions that must be retrieved and should be cited (grade 2)
-# supporting:  provisions that help but aren't required (grade 1)
-# Provision ids are chunk keys without the "#pN" part suffix. A rule and its
-# Guidance are separate provisions.
-#
-# Drafted by Claude from the chunk text in data/app.db and approved by the project
-# owner (2026-10-14). New items start as `reviewed: false`: only reviewed items
-# count for calibration and the release gate.
+
 version: 1
 items:
   # --- COB ---------------------------------------------------------------------
