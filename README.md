@@ -4,7 +4,7 @@
 
 A production-style retrieval-augmented generation (RAG) system, built end to end: structure-aware PDF ingestion, hybrid search with cross-encoder reranking, grounded generation with a citation validator, a calibrated refusal gate, conversation memory with query rewriting, an answer cache that was measured before it was trusted, a FastAPI service, full tracing and cost tracking, and an evaluation suite whose results gate every prompt release.
 
-**Read more:** [architecture](docs/architecture.md) · [case study](docs/WRITEUP.md) · [build log](docs/ROADMAP.MD)
+**Read more:** [architecture](docs/architecture.md) · [case study](docs/WRITEUP.md)
 
 > **Disclaimer:** This is a personal portfolio project. It is not affiliated with, endorsed by, or connected to the Dubai Financial Services Authority (DFSA).
  Rulebook content © Dubai Financial Services Authority. 
