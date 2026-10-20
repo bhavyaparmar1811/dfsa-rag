@@ -1,6 +1,6 @@
 # Langfuse (self-hosted v4): setup walkthrough and reference
 
-Phase E1 of the [roadmap](ROADMAP.MD). This is a record of how the local Langfuse stack was set up on 2026-10-13: every command, what it does, and what actually happened. Use it to redo the setup, to operate the stack day to day, or to debug it.
+ This is a record of how the local Langfuse stack was set up on 2026-10-13: every command, what it does, and what actually happened. Use it to redo the setup, to operate the stack day to day, or to debug it.
 
 **What Langfuse is for in this project:**
 - versioned prompts (E3–E4);
