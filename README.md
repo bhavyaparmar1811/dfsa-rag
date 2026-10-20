@@ -362,7 +362,7 @@ src/
 web/                        React UI: chat with citation inspector, eval reports, cost (Vite, TypeScript)
 scripts/                    command-line tools (ask, retrieve, cost_report, cache, inspect_store, sync/promote prompts, ...)
 tests/                      456 tests: offline fakes, plus `-m corpus` tests against the live index
-docs/                       architecture.md, WRITEUP.md (case study), ROADMAP.MD (build log), langfuse-setup.md
+docs/                       architecture.md, WRITEUP.md (case study), langfuse-setup.md
 ```
 
 ## Limitations
