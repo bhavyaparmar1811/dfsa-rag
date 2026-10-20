@@ -6,6 +6,8 @@ A production-style retrieval-augmented generation (RAG) system, built end to end
 
 **Read more:** [architecture](docs/architecture.md) · [case study](docs/WRITEUP.md) · [build log](docs/ROADMAP.MD)
 
+> **Disclaimer:** This is a personal portfolio project. It is not affiliated with, endorsed by, or connected to the Dubai Financial Services Authority (DFSA).
+
 
 ---
 
@@ -378,4 +380,4 @@ docs/                       architecture.md, WRITEUP.md (case study), ROADMAP.MD
 
 ---
 
-*Not legal advice. Answers are generated from a fixed snapshot of the DFSA Rulebook and DIFC Laws; check the current official text before relying on them.*
+*A personal portfolio project, not affiliated with or endorsed by the DFSA. Not legal advice. Answers are generated from a fixed snapshot of the DFSA Rulebook and DIFC Laws; check the current official text before relying on them.*

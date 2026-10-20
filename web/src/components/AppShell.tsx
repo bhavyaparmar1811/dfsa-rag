@@ -112,6 +112,9 @@ function Sidebar() {
           </AnimatePresence>
           {theme === "dark" ? "Light theme" : "Dark theme"}
         </button>
+        <p className="mt-2 px-2 text-[11px] leading-snug text-ink-4">
+          A personal portfolio project. Not affiliated with or endorsed by the DFSA.
+        </p>
       </div>
     </aside>
   );
